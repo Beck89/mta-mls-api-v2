@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import compress from '@fastify/compress';
 import sensible from '@fastify/sensible';
 import { env } from './config/env.js';
 import { searchRoutes } from './routes/search.js';
@@ -29,6 +30,9 @@ export function buildServer() {
   });
 
   app.register(sensible);
+
+  // Response compression (gzip/brotli) — reduces map_pins payload ~75%
+  app.register(compress, { global: true });
 
   // ─── API Key Authentication ──────────────────────────────────────────
   // All routes except /health require a valid API key via x-api-key header

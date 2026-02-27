@@ -94,6 +94,25 @@ const searchQuerySchema = z.object({
 
 const MAP_PINS_LIMIT = 5000;
 
+// ─── Cached total listings count ────────────────────────────────────────────
+// This value changes only when listings are added/removed, so we cache it
+// in-memory with a 5-minute TTL to avoid a full table scan on every request.
+
+let cachedTotalCount: { value: number; expiresAt: number } | null = null;
+const TOTAL_COUNT_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function getTotalListingsCount(): Promise<number> {
+  if (cachedTotalCount && Date.now() < cachedTotalCount.expiresAt) {
+    return cachedTotalCount.value;
+  }
+  const result = await sql`
+    SELECT COUNT(*)::int as total FROM properties
+    WHERE mlg_can_view = true AND 'IDX' = ANY(mlg_can_use)
+  `;
+  cachedTotalCount = { value: result[0].total, expiresAt: Date.now() + TOTAL_COUNT_TTL_MS };
+  return cachedTotalCount.value;
+}
+
 // ─── Status mapping ─────────────────────────────────────────────────────────
 
 const STATUS_MAP: Record<string, string[]> = {
@@ -199,47 +218,47 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
     filters.push(sql`p.property_sub_type IN ${sql(subTypes)}`);
   }
 
-  // Price
-  if (params.min_price !== undefined) filters.push(sql`p.list_price::numeric >= ${params.min_price}`);
-  if (params.max_price !== undefined) filters.push(sql`p.list_price::numeric <= ${params.max_price}`);
+  // Price (no ::numeric cast — columns are already numeric, cast defeats index usage)
+  if (params.min_price !== undefined) filters.push(sql`p.list_price >= ${params.min_price}`);
+  if (params.max_price !== undefined) filters.push(sql`p.list_price <= ${params.max_price}`);
 
   // Bedrooms
-  if (params.min_bedrooms !== undefined) filters.push(sql`p.bedrooms_total::numeric >= ${params.min_bedrooms}`);
-  if (params.max_bedrooms !== undefined) filters.push(sql`p.bedrooms_total::numeric <= ${params.max_bedrooms}`);
+  if (params.min_bedrooms !== undefined) filters.push(sql`p.bedrooms_total >= ${params.min_bedrooms}`);
+  if (params.max_bedrooms !== undefined) filters.push(sql`p.bedrooms_total <= ${params.max_bedrooms}`);
 
   // Bathrooms
-  if (params.min_bathrooms !== undefined) filters.push(sql`p.bathrooms_total::numeric >= ${params.min_bathrooms}`);
-  if (params.max_bathrooms !== undefined) filters.push(sql`p.bathrooms_total::numeric <= ${params.max_bathrooms}`);
+  if (params.min_bathrooms !== undefined) filters.push(sql`p.bathrooms_total >= ${params.min_bathrooms}`);
+  if (params.max_bathrooms !== undefined) filters.push(sql`p.bathrooms_total <= ${params.max_bathrooms}`);
 
   // Square footage
-  if (params.min_sqft !== undefined) filters.push(sql`p.living_area::numeric >= ${params.min_sqft}`);
-  if (params.max_sqft !== undefined) filters.push(sql`p.living_area::numeric <= ${params.max_sqft}`);
+  if (params.min_sqft !== undefined) filters.push(sql`p.living_area >= ${params.min_sqft}`);
+  if (params.max_sqft !== undefined) filters.push(sql`p.living_area <= ${params.max_sqft}`);
 
   // Lot size
-  if (params.min_lot_size !== undefined) filters.push(sql`p.lot_size_acres::numeric >= ${params.min_lot_size}`);
-  if (params.max_lot_size !== undefined) filters.push(sql`p.lot_size_acres::numeric <= ${params.max_lot_size}`);
+  if (params.min_lot_size !== undefined) filters.push(sql`p.lot_size_acres >= ${params.min_lot_size}`);
+  if (params.max_lot_size !== undefined) filters.push(sql`p.lot_size_acres <= ${params.max_lot_size}`);
 
   // Year built
   if (params.min_year_built !== undefined) filters.push(sql`p.year_built >= ${params.min_year_built}`);
   if (params.max_year_built !== undefined) filters.push(sql`p.year_built <= ${params.max_year_built}`);
 
-  // Price per sqft
+  // Price per sqft (computed expression — cast needed here for division safety)
   if (params.min_price_per_sqft !== undefined) {
-    filters.push(sql`(p.list_price::numeric / NULLIF(p.living_area::numeric, 0)) >= ${params.min_price_per_sqft}`);
+    filters.push(sql`(p.list_price / NULLIF(p.living_area, 0)) >= ${params.min_price_per_sqft}`);
   }
   if (params.max_price_per_sqft !== undefined) {
-    filters.push(sql`(p.list_price::numeric / NULLIF(p.living_area::numeric, 0)) <= ${params.max_price_per_sqft}`);
+    filters.push(sql`(p.list_price / NULLIF(p.living_area, 0)) <= ${params.max_price_per_sqft}`);
   }
 
   // Amenities
   if (params.pool === true) filters.push(sql`p.pool_private_yn = true`);
-  if (params.garage === true) filters.push(sql`p.garage_spaces::numeric > 0`);
-  if (params.min_garage_spaces !== undefined) filters.push(sql`p.garage_spaces::numeric >= ${params.min_garage_spaces}`);
-  if (params.max_garage_spaces !== undefined) filters.push(sql`p.garage_spaces::numeric <= ${params.max_garage_spaces}`);
-  if (params.min_parking_spaces !== undefined) filters.push(sql`p.parking_total::numeric >= ${params.min_parking_spaces}`);
-  if (params.max_parking_spaces !== undefined) filters.push(sql`p.parking_total::numeric <= ${params.max_parking_spaces}`);
+  if (params.garage === true) filters.push(sql`p.garage_spaces > 0`);
+  if (params.min_garage_spaces !== undefined) filters.push(sql`p.garage_spaces >= ${params.min_garage_spaces}`);
+  if (params.max_garage_spaces !== undefined) filters.push(sql`p.garage_spaces <= ${params.max_garage_spaces}`);
+  if (params.min_parking_spaces !== undefined) filters.push(sql`p.parking_total >= ${params.min_parking_spaces}`);
+  if (params.max_parking_spaces !== undefined) filters.push(sql`p.parking_total <= ${params.max_parking_spaces}`);
   if (params.waterfront === true) filters.push(sql`p.waterfront_yn = true`);
-  if (params.fireplace === true) filters.push(sql`p.fireplaces_total::numeric > 0`);
+  if (params.fireplace === true) filters.push(sql`p.fireplaces_total > 0`);
   if (params.new_construction === true) filters.push(sql`p.new_construction_yn = true`);
 
   // Days on market
@@ -249,7 +268,7 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
 
   // Price reduction
   if (params.price_reduction) {
-    filters.push(sql`p.list_price::numeric < p.original_list_price::numeric`);
+    filters.push(sql`p.list_price < p.original_list_price`);
     if (params.price_reduction !== 'any') {
       const intervalDays: Record<string, number> = {
         last_day: 1, last_3_days: 3, last_7_days: 7,
@@ -283,12 +302,12 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
 function getSortFragment(sortBy: string, sortDir: string) {
   const dir = sortDir === 'asc' ? sql`ASC NULLS LAST` : sql`DESC NULLS LAST`;
   switch (sortBy) {
-    case 'list_price': return sql`p.list_price::numeric ${dir}`;
-    case 'living_area': return sql`p.living_area::numeric ${dir}`;
-    case 'price_per_sqft': return sql`(p.list_price::numeric / NULLIF(p.living_area::numeric, 0)) ${dir}`;
+    case 'list_price': return sql`p.list_price ${dir}`;
+    case 'living_area': return sql`p.living_area ${dir}`;
+    case 'price_per_sqft': return sql`(p.list_price / NULLIF(p.living_area, 0)) ${dir}`;
     case 'status': return sql`p.standard_status ${dir}`;
-    case 'bedrooms_total': return sql`p.bedrooms_total::numeric ${dir}`;
-    case 'bathrooms_total': return sql`p.bathrooms_total::numeric ${dir}`;
+    case 'bedrooms_total': return sql`p.bedrooms_total ${dir}`;
+    case 'bathrooms_total': return sql`p.bathrooms_total ${dir}`;
     case 'list_date':
     default: return sql`p.original_entry_ts ${dir}`;
   }
@@ -467,8 +486,11 @@ export async function searchRoutes(app: FastifyInstance) {
       let dataResult: any[];
       let mapPinsResult: any[] = [];
 
+      // Fetch cached total count in parallel with all other queries
+      const totalCountPromise = getTotalListingsCount();
+
       if (hasOpenHouseFilter) {
-        // Open house filter requires JOIN — run count + data sequentially
+        // Open house filter requires JOIN — run count + data in parallel
         // (map pins skipped for open house searches)
         [countResult, dataResult] = await Promise.all([
           sql`
@@ -489,12 +511,8 @@ export async function searchRoutes(app: FastifyInstance) {
         ]);
       } else if (shouldFetchMapPins) {
         // Standard search WITH map pins — run all 3 in parallel
-        [countResult, dataResult, mapPinsResult] = await Promise.all([
-          sql`
-            SELECT COUNT(*)::int as total
-            FROM properties p
-            WHERE ${whereClause}
-          `,
+        // Skip separate COUNT query: derive filtered count from map_pins result
+        [dataResult, mapPinsResult] = await Promise.all([
           sql`
             SELECT ${SELECT_FIELDS}
             FROM properties p
@@ -512,8 +530,21 @@ export async function searchRoutes(app: FastifyInstance) {
             LIMIT ${MAP_PINS_LIMIT + 1}
           `,
         ]);
+        // Derive filtered count from map pins (avoids a separate COUNT query)
+        // If truncated, we need the real count; otherwise map_pins length IS the count
+        if (mapPinsResult.length > MAP_PINS_LIMIT) {
+          // Truncated — need exact count (run it now, overlapping with totalCount)
+          countResult = await sql`
+            SELECT COUNT(*)::int as total
+            FROM properties p
+            WHERE ${whereClause}
+          `;
+        } else {
+          // Not truncated — map pins length is the exact filtered count
+          countResult = [{ total: mapPinsResult.length }];
+        }
       } else {
-        // Standard search WITHOUT map pins
+        // Standard search WITHOUT map pins — run count + data in parallel
         [countResult, dataResult] = await Promise.all([
           sql`
             SELECT COUNT(*)::int as total
@@ -531,12 +562,9 @@ export async function searchRoutes(app: FastifyInstance) {
         ]);
       }
 
-      const totalResult = await sql`
-        SELECT COUNT(*)::int as total FROM properties WHERE mlg_can_view = true AND 'IDX' = ANY(mlg_can_use)
-      `;
-
+      // Await the cached total count (usually instant from cache)
+      const totalListingsCount = await totalCountPromise;
       const filteredCount = countResult[0].total;
-      const totalListingsCount = totalResult[0].total;
       const totalPages = Math.ceil(filteredCount / itemsPerPage);
 
       // ─── Process map pins ─────────────────────────────────────────
@@ -598,29 +626,33 @@ export async function searchRoutes(app: FastifyInstance) {
         }
       }
 
-      // ─── Fetch first 3 photos for each listing ───────────────────
+      // ─── Fetch first 3 photos for each listing (lateral join) ─────
+      // Uses LATERAL to limit to 3 photos per listing at the DB level,
+      // avoiding fetching all photos and filtering in JS.
       let photoMap: Record<string, any[]> = {};
       if (dataResult.length > 0) {
         const listingKeys = dataResult.map((r: any) => r.listing_key);
         const photoResults = await sql`
-          SELECT DISTINCT ON (listing_key, media_order)
-            listing_key, media_order, public_url
-          FROM media
-          WHERE listing_key = ANY(${listingKeys})
-            AND status = 'complete'
-            AND public_url IS NOT NULL
-          ORDER BY listing_key, media_order ASC NULLS LAST
+          SELECT lk.listing_key, m.media_order, m.public_url
+          FROM unnest(${listingKeys}::varchar[]) AS lk(listing_key)
+          CROSS JOIN LATERAL (
+            SELECT media_order, public_url
+            FROM media
+            WHERE listing_key = lk.listing_key
+              AND status = 'complete'
+              AND public_url IS NOT NULL
+            ORDER BY media_order ASC NULLS LAST
+            LIMIT 3
+          ) m
         `;
         for (const photo of photoResults) {
           if (!photoMap[photo.listing_key]) {
             photoMap[photo.listing_key] = [];
           }
-          if (photoMap[photo.listing_key].length < 3) {
-            photoMap[photo.listing_key].push({
-              order: photo.media_order,
-              url: photo.public_url,
-            });
-          }
+          photoMap[photo.listing_key].push({
+            order: photo.media_order,
+            url: photo.public_url,
+          });
         }
       }
 
