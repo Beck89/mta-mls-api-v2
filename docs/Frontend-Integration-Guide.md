@@ -24,7 +24,19 @@ Complete reference for integrating the new API into the Astro + React frontend. 
 
 ## Authentication
 
-Every API request (except `/health`) must include the `x-api-key` header.
+Every API request (except `/health`) must include the `x-api-key` header. The API uses a **single static API key** — there are no per-user keys, token expiration, or permission scoping.
+
+### Auth Model
+
+| Property | Value |
+|----------|-------|
+| **Header** | `x-api-key` |
+| **Key type** | Single shared static secret |
+| **Expiration** | None — key is valid until rotated server-side |
+| **Exempt routes** | `GET /health` (no key required) |
+| **Rate limiting** | Not currently enforced |
+
+### Basic Usage
 
 ```typescript
 // In your Astro server-side code
@@ -40,7 +52,51 @@ async function fetchAPI(path: string) {
 }
 ```
 
-**Important**: API calls should happen server-side (Astro SSR) to keep the API key secret. Never expose the API key in client-side JavaScript.
+### Error Response
+
+If the API key is missing or invalid, the server returns a `401` with this body:
+
+```json
+{
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Invalid or missing API key. Provide a valid x-api-key header."
+  }
+}
+```
+
+Handle this in your fetch helper:
+
+```typescript
+async function fetchAPI(path: string) {
+  const response = await fetch(`${API_URL}${path}`, {
+    headers: { 'x-api-key': API_KEY },
+  });
+
+  if (response.status === 401) {
+    throw new Error('API key is invalid or missing — check MLS_API_KEY env var');
+  }
+
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}
+```
+
+### CORS
+
+The API supports configurable CORS origins via the `CORS_ORIGIN` server environment variable:
+
+| `CORS_ORIGIN` value | Behavior |
+|---------------------|----------|
+| `*` (default) | All origins allowed |
+| `https://movingtoaustin.com,https://www.movingtoaustin.com` | Only listed origins allowed |
+
+Allowed methods: `GET`, `POST`, `OPTIONS`.
+
+### Security Notes
+
+- **API calls should happen server-side** (Astro SSR) to keep the API key secret. Never expose the API key in client-side JavaScript.
+- The `CORS_ORIGIN` setting provides an additional layer of protection but is not a substitute for keeping the key server-side.
 
 ---
 

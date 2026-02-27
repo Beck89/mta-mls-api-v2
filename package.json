@@ -4,6 +4,9 @@
   "description": "MLS IDX API Server - Consumer-facing API for property search, detail, and typeahead",
   "type": "module",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",

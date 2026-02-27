@@ -1,0 +1,7 @@
+# Nixpacks configuration for Coolify deployment
+
+[variables]
+NODE_ENV = "production"
+
+[phases.setup]
+nixPkgs = ["nodejs_22"]
