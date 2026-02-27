@@ -172,7 +172,13 @@ GET /api/listings/search
 |-----------|------|-------------|
 | `keywords` | string | Searches address, city, subdivision, remarks, ZIP |
 
-### Response Format
+#### Map Pins (Split-Response Mode)
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `include_map_pins` | `"true"` | Returns a lightweight `map_pins` array with ALL matching listings (up to 5,000) alongside the normal paginated `data`. Use on initial load and bounds changes; omit for pagination (page 2+). Not available when `open_house` filter is active. |
+
+### Response Format (Standard)
 
 ```json
 {
@@ -235,6 +241,69 @@ GET /api/listings/search
 }
 ```
 
+### Response Format (with `include_map_pins=true`)
+
+When `include_map_pins=true` is passed, the response includes an additional `map_pins` array containing lightweight pin data for ALL matching listings (up to 5,000). This enables the frontend to render complete map coverage while paginating the card list independently.
+
+```json
+{
+  "map_pins": [
+    {
+      "id": "ACT218251278",
+      "lat": 30.1787,
+      "lng": -97.7929,
+      "price": 400000,
+      "status": "Active",
+      "beds": 4,
+      "baths": 4,
+      "property_type": "Residential"
+    }
+  ],
+  "data": [
+    { "listing_key": "ACT218251278", "list_price": 400000, "photo_urls": [...], ... }
+  ],
+  "metadata": {
+    "total_listings_count": 33882,
+    "filtered_listings_count": 2847,
+    "current_page": 1,
+    "total_pages": 95,
+    "items_per_page": 30,
+    "sort_by": "list_date",
+    "sort_direction": "desc",
+    "bounds": {
+      "sw": { "lat": 30.13, "lng": -98.09 },
+      "ne": { "lat": 30.53, "lng": -97.46 }
+    },
+    "map_pins_count": 2847,
+    "map_pins_truncated": false
+  }
+}
+```
+
+#### Map Pin Fields
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | string | Same as `listing_key` — use to correlate with card data |
+| `lat` | number | Latitude |
+| `lng` | number | Longitude |
+| `price` | number | List price |
+| `status` | string | Standard status (e.g., "Active") |
+| `beds` | number \| null | Bedroom count |
+| `baths` | number \| null | Bathroom count |
+| `property_type` | string | Property type for pin icon differentiation |
+
+#### Map Pins Metadata
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `map_pins_count` | number | Number of pins returned |
+| `map_pins_truncated` | boolean | `true` if results exceeded 5,000 limit — frontend should show "Zoom in to see all results" |
+
+> **Note**: When `include_map_pins=true`, the `bounds` in metadata are computed from ALL map pins (the full filtered dataset), not just the paginated page. This gives accurate bounds for `map.fitBounds()`.
+
+> **Note**: Map pins are not available when the `open_house` filter is active (those searches require a JOIN and typically return small result sets where the standard `data` array suffices).
+
 ### Key Response Fields
 
 | Field | Type | Notes |
@@ -273,6 +342,12 @@ GET /api/listings/search?min_latitude=30.25&max_latitude=30.30&min_longitude=-97
 
 # Custom polygon search (user draws on map)
 GET /api/listings/search?polygon={"type":"Polygon","coordinates":[[[-97.75,30.26],[-97.74,30.26],[-97.74,30.27],[-97.75,30.27],[-97.75,30.26]]]}&status=active
+
+# Map search with split response (initial load / bounds change)
+GET /api/listings/search?min_latitude=30.25&max_latitude=30.35&min_longitude=-97.80&max_longitude=-97.70&status=active&items_per_page=30&include_map_pins=true
+
+# Pagination (page 2+) — no map_pins needed, pins already loaded
+GET /api/listings/search?min_latitude=30.25&max_latitude=30.35&min_longitude=-97.80&max_longitude=-97.70&status=active&items_per_page=30&page=2
 ```
 
 > **Multi-value logic**: Comma-separated values within the same parameter use **OR** logic (e.g., `zip_code=78704,78745` returns listings in either ZIP). Different parameters are combined with **AND** logic (e.g., `city=Austin&min_bedrooms=3` returns Austin listings with 3+ beds).
@@ -589,7 +664,30 @@ GET /api/stats
 
 ## Frontend Integration Patterns
 
-### Map Search Flow
+### Map Search Flow (Split-Response)
+
+```
+1. User lands on /for-sale/search
+2. SSR: GET /api/listings/search?...&items_per_page=30&include_map_pins=true
+3. Hydrate React with SSR data
+4. Map renders ALL pins from map_pins array (use clustering for dense areas)
+5. Card list renders 30 items from data array
+
+On scroll (infinite scroll / load more):
+6. GET /api/listings/search?...&items_per_page=30&page=2  (NO include_map_pins)
+7. Append 30 cards to list, don't touch map pins
+
+On map pan/zoom:
+8. Debounce 800ms
+9. GET /api/listings/search?...new bounds...&items_per_page=30&include_map_pins=true
+10. Replace ALL map pins with new map_pins array
+11. Replace card list with new page 1 data
+
+If metadata.map_pins_truncated === true:
+12. Show "Zoom in to see all results" indicator on map
+```
+
+### Map Search Flow (Legacy — without map pins)
 
 ```
 1. User pans/zooms map
@@ -609,6 +707,36 @@ GET /api/stats
 5. GET /api/neighborhoods/downtown → polygon geometry for map overlay
 6. Draw polygon boundary on map, show pins, zoom to metadata.bounds
 7. User clicks "Clear boundary" → remove neighborhood param, switch to bounding box search
+```
+
+### Map Pin Component
+
+```typescript
+interface MapPin {
+  id: string;        // listing_key
+  lat: number;
+  lng: number;
+  price: number;
+  status: string;
+  beds: number | null;
+  baths: number | null;
+  property_type: string;
+}
+
+// Use map_pins for markers, data for cards
+interface SearchResponse {
+  map_pins?: MapPin[];           // Only present when include_map_pins=true
+  data: ListingCard[];           // Paginated card data
+  metadata: {
+    filtered_listings_count: number;
+    current_page: number;
+    total_pages: number;
+    items_per_page: number;
+    bounds: { sw: { lat: number; lng: number }; ne: { lat: number; lng: number } } | null;
+    map_pins_count?: number;     // Only present when include_map_pins=true
+    map_pins_truncated?: boolean; // Only present when include_map_pins=true
+  };
+}
 ```
 
 ### Listing Card Component

@@ -1,9 +1,14 @@
 /**
  * GET /api/listings/search
- * 
+ *
  * Primary property search with advanced filtering, sorting, pagination,
  * bounding box, GeoJSON polygon, and named neighborhood/ZIP polygon support.
- * 
+ *
+ * Supports split-response mode: when `include_map_pins=true`, returns a
+ * lightweight `map_pins` array (all matching listings with minimal fields)
+ * alongside the normal paginated `data` array. This enables the frontend to
+ * render ALL map markers while paginating the card list independently.
+ *
  * Metadata includes bounds for map centering/zooming.
  */
 
@@ -80,7 +85,14 @@ const searchQuerySchema = z.object({
 
   // Text search
   keywords: z.string().optional(),
+
+  // Map pins — lightweight pin data for all matching listings
+  include_map_pins: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
 });
+
+// ─── Map pins configuration ─────────────────────────────────────────────────
+
+const MAP_PINS_LIMIT = 5000;
 
 // ─── Status mapping ─────────────────────────────────────────────────────────
 
@@ -330,6 +342,34 @@ function formatSearchResult(row: any, photoUrls: any[], nextOpenHouse: any | nul
   };
 }
 
+// ─── Format a raw DB row into a lightweight map pin ─────────────────────────
+
+function formatMapPin(row: any) {
+  return {
+    id: row.listing_key,
+    lat: parseFloat(row.latitude),
+    lng: parseFloat(row.longitude),
+    price: parseFloat(row.list_price) || 0,
+    status: row.standard_status,
+    beds: parseFloat(row.bedrooms_total) || null,
+    baths: parseFloat(row.bathrooms_total) || null,
+    property_type: row.property_type,
+  };
+}
+
+// ─── Map pin select fields (lightweight — no JOINs needed) ──────────────────
+
+const MAP_PIN_FIELDS = sql`
+  p.listing_key,
+  p.latitude,
+  p.longitude,
+  p.list_price,
+  p.standard_status,
+  p.bedrooms_total,
+  p.bathrooms_total,
+  p.property_type
+`;
+
 // ─── Select fields ──────────────────────────────────────────────────────────
 
 const SELECT_FIELDS = sql`
@@ -416,40 +456,79 @@ export async function searchRoutes(app: FastifyInstance) {
         }
       }
 
-      // Execute count and data queries
+      // ─── Determine if map pins should be fetched ──────────────────
+      // Map pins are returned when include_map_pins=true, but skipped
+      // when open_house filter is active (requires JOIN, small result sets)
+      const shouldFetchMapPins = params.include_map_pins === true && !hasOpenHouseFilter;
+
+      // ─── Execute queries in parallel ──────────────────────────────
+      // Run count, data, total, and optionally map_pins concurrently
       let countResult: any[];
       let dataResult: any[];
+      let mapPinsResult: any[] = [];
 
       if (hasOpenHouseFilter) {
-        countResult = await sql`
-          SELECT COUNT(DISTINCT p.listing_key)::int as total
-          FROM properties p
-          INNER JOIN open_houses oh ON oh.listing_id = p.listing_id AND oh.mlg_can_view = true ${openHouseCondition}
-          WHERE ${whereClause}
-        `;
-        dataResult = await sql`
-          SELECT DISTINCT ON (p.listing_key) ${SELECT_FIELDS}
-          FROM properties p
-          INNER JOIN open_houses oh ON oh.listing_id = p.listing_id AND oh.mlg_can_view = true ${openHouseCondition}
-          WHERE ${whereClause}
-          ORDER BY p.listing_key
-          LIMIT ${itemsPerPage}
-          OFFSET ${offset}
-        `;
+        // Open house filter requires JOIN — run count + data sequentially
+        // (map pins skipped for open house searches)
+        [countResult, dataResult] = await Promise.all([
+          sql`
+            SELECT COUNT(DISTINCT p.listing_key)::int as total
+            FROM properties p
+            INNER JOIN open_houses oh ON oh.listing_id = p.listing_id AND oh.mlg_can_view = true ${openHouseCondition}
+            WHERE ${whereClause}
+          `,
+          sql`
+            SELECT DISTINCT ON (p.listing_key) ${SELECT_FIELDS}
+            FROM properties p
+            INNER JOIN open_houses oh ON oh.listing_id = p.listing_id AND oh.mlg_can_view = true ${openHouseCondition}
+            WHERE ${whereClause}
+            ORDER BY p.listing_key
+            LIMIT ${itemsPerPage}
+            OFFSET ${offset}
+          `,
+        ]);
+      } else if (shouldFetchMapPins) {
+        // Standard search WITH map pins — run all 3 in parallel
+        [countResult, dataResult, mapPinsResult] = await Promise.all([
+          sql`
+            SELECT COUNT(*)::int as total
+            FROM properties p
+            WHERE ${whereClause}
+          `,
+          sql`
+            SELECT ${SELECT_FIELDS}
+            FROM properties p
+            WHERE ${whereClause}
+            ORDER BY ${sortFragment}
+            LIMIT ${itemsPerPage}
+            OFFSET ${offset}
+          `,
+          sql`
+            SELECT ${MAP_PIN_FIELDS}
+            FROM properties p
+            WHERE ${whereClause}
+              AND p.latitude IS NOT NULL
+              AND p.longitude IS NOT NULL
+            LIMIT ${MAP_PINS_LIMIT + 1}
+          `,
+        ]);
       } else {
-        countResult = await sql`
-          SELECT COUNT(*)::int as total
-          FROM properties p
-          WHERE ${whereClause}
-        `;
-        dataResult = await sql`
-          SELECT ${SELECT_FIELDS}
-          FROM properties p
-          WHERE ${whereClause}
-          ORDER BY ${sortFragment}
-          LIMIT ${itemsPerPage}
-          OFFSET ${offset}
-        `;
+        // Standard search WITHOUT map pins
+        [countResult, dataResult] = await Promise.all([
+          sql`
+            SELECT COUNT(*)::int as total
+            FROM properties p
+            WHERE ${whereClause}
+          `,
+          sql`
+            SELECT ${SELECT_FIELDS}
+            FROM properties p
+            WHERE ${whereClause}
+            ORDER BY ${sortFragment}
+            LIMIT ${itemsPerPage}
+            OFFSET ${offset}
+          `,
+        ]);
       }
 
       const totalResult = await sql`
@@ -460,9 +539,46 @@ export async function searchRoutes(app: FastifyInstance) {
       const totalListingsCount = totalResult[0].total;
       const totalPages = Math.ceil(filteredCount / itemsPerPage);
 
-      // ─── Compute bounds from results ─────────────────────────────
+      // ─── Process map pins ─────────────────────────────────────────
+      let mapPins: any[] | undefined;
+      let mapPinsTruncated = false;
+
+      if (shouldFetchMapPins && mapPinsResult.length > 0) {
+        // Check if we hit the limit (we fetched LIMIT + 1 to detect truncation)
+        if (mapPinsResult.length > MAP_PINS_LIMIT) {
+          mapPinsTruncated = true;
+          mapPinsResult = mapPinsResult.slice(0, MAP_PINS_LIMIT);
+        }
+        mapPins = mapPinsResult
+          .filter((row: any) => row.latitude && row.longitude)
+          .map(formatMapPin);
+      }
+
+      // ─── Compute bounds ───────────────────────────────────────────
+      // When map pins are available, compute bounds from ALL pins (full
+      // filtered dataset). Otherwise fall back to paginated data bounds.
       let bounds = null;
-      if (dataResult.length > 0) {
+      const boundsSource = mapPins && mapPins.length > 0 ? mapPins : null;
+
+      if (boundsSource) {
+        // Compute bounds from map pins (covers full filtered result set)
+        let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+        for (const pin of boundsSource) {
+          if (!isNaN(pin.lat) && !isNaN(pin.lng)) {
+            if (pin.lat < minLat) minLat = pin.lat;
+            if (pin.lat > maxLat) maxLat = pin.lat;
+            if (pin.lng < minLng) minLng = pin.lng;
+            if (pin.lng > maxLng) maxLng = pin.lng;
+          }
+        }
+        if (minLat <= maxLat && minLng <= maxLng) {
+          bounds = {
+            sw: { lat: minLat, lng: minLng },
+            ne: { lat: maxLat, lng: maxLng },
+          };
+        }
+      } else if (dataResult.length > 0) {
+        // Fallback: compute bounds from paginated data
         let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
         for (const row of dataResult) {
           const lat = parseFloat(row.latitude);
@@ -541,7 +657,7 @@ export async function searchRoutes(app: FastifyInstance) {
         )
       );
 
-      return {
+      const response: any = {
         data,
         metadata: {
           total_listings_count: totalListingsCount,
@@ -554,6 +670,15 @@ export async function searchRoutes(app: FastifyInstance) {
           bounds,
         },
       };
+
+      // Include map_pins only when requested (keeps backward compatibility)
+      if (shouldFetchMapPins) {
+        response.map_pins = mapPins || [];
+        response.metadata.map_pins_count = mapPins ? mapPins.length : 0;
+        response.metadata.map_pins_truncated = mapPinsTruncated;
+      }
+
+      return response;
     } catch (err: any) {
       request.log.error(err, 'Search error');
       return reply.status(500).send({
