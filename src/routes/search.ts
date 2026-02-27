@@ -315,10 +315,44 @@ function getSortFragment(sortBy: string, sortDir: string) {
 
 // ─── Format a raw DB row into the clean search result shape ─────────────────
 
-function formatSearchResult(row: any, photoUrls: any[], nextOpenHouse: any | null) {
+function formatSearchResult(row: any) {
   const listPrice = parseFloat(row.list_price) || 0;
   const originalPrice = parseFloat(row.original_list_price) || 0;
   const livingArea = parseFloat(row.living_area) || 0;
+
+  // Parse embedded photo JSON from correlated subquery
+  let photoUrls: any[] = [];
+  if (row.photo_urls_json) {
+    try {
+      const parsed = typeof row.photo_urls_json === 'string'
+        ? JSON.parse(row.photo_urls_json)
+        : row.photo_urls_json;
+      if (Array.isArray(parsed)) {
+        photoUrls = parsed.map((p: any) => ({ order: p.media_order, url: p.public_url }));
+      }
+    } catch {
+      // fallback to empty
+    }
+  }
+
+  // Parse embedded open house JSON from correlated subquery
+  let nextOpenHouse: any = null;
+  if (row.next_open_house_json) {
+    try {
+      const parsed = typeof row.next_open_house_json === 'string'
+        ? JSON.parse(row.next_open_house_json)
+        : row.next_open_house_json;
+      if (parsed && parsed.date) {
+        nextOpenHouse = {
+          date: parsed.date,
+          start_time: parsed.start_time,
+          end_time: parsed.end_time,
+        };
+      }
+    } catch {
+      // fallback to null
+    }
+  }
 
   return {
     listing_key: row.listing_key,
@@ -389,7 +423,10 @@ const MAP_PIN_FIELDS = sql`
   p.property_type
 `;
 
-// ─── Select fields ──────────────────────────────────────────────────────────
+// ─── Select fields (with embedded photo + open house subqueries) ────────────
+// Photos and open houses are fetched as correlated subqueries within the main
+// data query, eliminating 2 sequential DB round-trips. Each subquery hits an
+// index (idx_media_listing_photos for photos, open_houses PK for OH).
 
 const SELECT_FIELDS = sql`
   p.listing_key,
@@ -420,7 +457,24 @@ const SELECT_FIELDS = sql`
   p.latitude,
   p.longitude,
   p.photos_count,
-  p.original_entry_ts
+  p.original_entry_ts,
+  (SELECT COALESCE(json_agg(sub ORDER BY sub.media_order ASC NULLS LAST), '[]'::json)
+   FROM (SELECT media_order, public_url
+         FROM media
+         WHERE listing_key = p.listing_key
+           AND status = 'complete'
+           AND public_url IS NOT NULL
+         ORDER BY media_order ASC NULLS LAST
+         LIMIT 3) sub
+  ) AS photo_urls_json,
+  (SELECT json_build_object('date', oh.open_house_date, 'start_time', oh.open_house_start, 'end_time', oh.open_house_end)
+   FROM open_houses oh
+   WHERE oh.listing_id = p.listing_id
+     AND oh.mlg_can_view = true
+     AND oh.open_house_date >= CURRENT_DATE
+   ORDER BY oh.open_house_start ASC
+   LIMIT 1
+  ) AS next_open_house_json
 `;
 
 // ─── Route Handler ──────────────────────────────────────────────────────────
@@ -450,6 +504,8 @@ export async function searchRoutes(app: FastifyInstance) {
     }
 
     try {
+      const t0 = performance.now();
+
       const filters = buildFilters(params);
       const whereClause = filters.reduce((acc, f, i) =>
         i === 0 ? f : sql`${acc} AND ${f}`
@@ -626,68 +682,14 @@ export async function searchRoutes(app: FastifyInstance) {
         }
       }
 
-      // ─── Fetch first 3 photos for each listing (lateral join) ─────
-      // Uses LATERAL to limit to 3 photos per listing at the DB level,
-      // avoiding fetching all photos and filtering in JS.
-      let photoMap: Record<string, any[]> = {};
-      if (dataResult.length > 0) {
-        const listingKeys = dataResult.map((r: any) => r.listing_key);
-        const photoResults = await sql`
-          SELECT lk.listing_key, m.media_order, m.public_url
-          FROM unnest(${listingKeys}::varchar[]) AS lk(listing_key)
-          CROSS JOIN LATERAL (
-            SELECT media_order, public_url
-            FROM media
-            WHERE listing_key = lk.listing_key
-              AND status = 'complete'
-              AND public_url IS NOT NULL
-            ORDER BY media_order ASC NULLS LAST
-            LIMIT 3
-          ) m
-        `;
-        for (const photo of photoResults) {
-          if (!photoMap[photo.listing_key]) {
-            photoMap[photo.listing_key] = [];
-          }
-          photoMap[photo.listing_key].push({
-            order: photo.media_order,
-            url: photo.public_url,
-          });
-        }
-      }
-
-      // ─── Fetch next open house for each listing ──────────────────
-      let openHouseMap: Record<string, any> = {};
-      if (dataResult.length > 0) {
-        const listingIds = dataResult.map((r: any) => r.listing_id).filter(Boolean);
-        if (listingIds.length > 0) {
-          const ohResults = await sql`
-            SELECT DISTINCT ON (listing_id)
-              listing_id, open_house_date, open_house_start, open_house_end
-            FROM open_houses
-            WHERE listing_id = ANY(${listingIds})
-              AND mlg_can_view = true
-              AND open_house_date >= CURRENT_DATE
-            ORDER BY listing_id, open_house_start ASC
-          `;
-          for (const oh of ohResults) {
-            openHouseMap[oh.listing_id] = {
-              date: oh.open_house_date,
-              start_time: oh.open_house_start,
-              end_time: oh.open_house_end,
-            };
-          }
-        }
-      }
-
       // ─── Format response ─────────────────────────────────────────
-      const data = dataResult.map((row: any) =>
-        formatSearchResult(
-          row,
-          photoMap[row.listing_key] || [],
-          openHouseMap[row.listing_id] || null,
-        )
-      );
+      // Photos and open houses are already embedded in each row via
+      // correlated subqueries in SELECT_FIELDS — no separate queries needed.
+      const t1 = performance.now();
+
+      const data = dataResult.map((row: any) => formatSearchResult(row));
+
+      const t2 = performance.now();
 
       const response: any = {
         data,
@@ -709,6 +711,12 @@ export async function searchRoutes(app: FastifyInstance) {
         response.metadata.map_pins_count = mapPins ? mapPins.length : 0;
         response.metadata.map_pins_truncated = mapPinsTruncated;
       }
+
+      // ─── Server-Timing header for performance diagnostics ─────────
+      const t3 = performance.now();
+      reply.header('Server-Timing',
+        `db;dur=${(t1 - t0).toFixed(0)}, format;dur=${(t2 - t1).toFixed(0)}, total;dur=${(t3 - t0).toFixed(0)}`
+      );
 
       return response;
     } catch (err: any) {
