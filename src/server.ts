@@ -11,15 +11,15 @@ import { neighborhoodRoutes } from './routes/neighborhoods.js';
 
 export function buildServer() {
   const app = Fastify({
-    logger: {
-      level: env.LOG_LEVEL,
-      ...(env.NODE_ENV === 'development' && {
-        transport: {
-          target: 'pino-pretty',
-          options: { colorize: true },
+    logger: env.NODE_ENV === 'production'
+      ? { level: env.LOG_LEVEL }
+      : {
+          level: env.LOG_LEVEL,
+          transport: {
+            target: 'pino-pretty',
+            options: { colorize: true },
+          },
         },
-      }),
-    },
   });
 
   // ─── Plugins ─────────────────────────────────────────────────────────

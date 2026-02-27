@@ -22,6 +22,7 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 COPY data/ ./data/
 
+# Production environment — pino-pretty is NOT used in production
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
