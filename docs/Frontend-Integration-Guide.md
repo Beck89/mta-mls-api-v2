@@ -127,9 +127,9 @@ GET /api/listings/search
 | `min_longitude` | number | Bounding box west |
 | `max_longitude` | number | Bounding box east |
 | `polygon` | string | Stringified GeoJSON for custom shape search |
-| `neighborhood` | string | Neighborhood slug (e.g., `downtown`, `east-cesar-chavez`) |
-| `city` | string | City name (case-insensitive) |
-| `zip_code` | string | ZIP code |
+| `neighborhood` | string | Comma-separated neighborhood slugs (e.g., `downtown`, `downtown,east-cesar-chavez`) |
+| `city` | string | Comma-separated city names, case-insensitive (e.g., `Austin`, `Austin,Round Rock`) |
+| `zip_code` | string | Comma-separated ZIP codes (e.g., `78704`, `78704,78745,78748`) |
 
 #### Property Filters
 
@@ -259,12 +259,23 @@ GET /api/listings/search?city=Austin&status=active&min_bedrooms=3&min_price=4000
 # Neighborhood search (shows only listings inside polygon)
 GET /api/listings/search?neighborhood=downtown&status=active
 
+# Multi-neighborhood search (union of polygons)
+GET /api/listings/search?neighborhood=downtown,east-cesar-chavez,zilker&status=active
+
+# Multi-ZIP code search (badge-style multi-select)
+GET /api/listings/search?zip_code=78704,78745,78748&status=active
+
+# Multi-city search
+GET /api/listings/search?city=Austin,Round Rock,Cedar Park&status=active
+
 # Map bounding box search
 GET /api/listings/search?min_latitude=30.25&max_latitude=30.30&min_longitude=-97.78&max_longitude=-97.72&status=active
 
 # Custom polygon search (user draws on map)
 GET /api/listings/search?polygon={"type":"Polygon","coordinates":[[[-97.75,30.26],[-97.74,30.26],[-97.74,30.27],[-97.75,30.27],[-97.75,30.26]]]}&status=active
 ```
+
+> **Multi-value logic**: Comma-separated values within the same parameter use **OR** logic (e.g., `zip_code=78704,78745` returns listings in either ZIP). Different parameters are combined with **AND** logic (e.g., `city=Austin&min_bedrooms=3` returns Austin listings with 3+ beds).
 
 ---
 

@@ -141,21 +141,38 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
     }
   }
 
-  // Named neighborhood
+  // Named neighborhood (supports comma-separated slugs for multi-select)
   if (params.neighborhood) {
-    filters.push(
-      sql`ST_Within(p.geog::geometry, (SELECT geom FROM neighborhoods WHERE slug = ${params.neighborhood} LIMIT 1))`
-    );
+    const slugs = params.neighborhood.split(',').map(s => s.trim()).filter(Boolean);
+    if (slugs.length === 1) {
+      filters.push(
+        sql`ST_Within(p.geog::geometry, (SELECT geom FROM neighborhoods WHERE slug = ${slugs[0]} LIMIT 1))`
+      );
+    } else {
+      filters.push(
+        sql`ST_Within(p.geog::geometry, (SELECT ST_Union(geom) FROM neighborhoods WHERE slug = ANY(${slugs})))`
+      );
+    }
   }
 
-  // City
+  // City (supports comma-separated cities for multi-select)
   if (params.city) {
-    filters.push(sql`LOWER(p.city) = LOWER(${params.city})`);
+    const cities = params.city.split(',').map(c => c.trim().toLowerCase()).filter(Boolean);
+    if (cities.length === 1) {
+      filters.push(sql`LOWER(p.city) = LOWER(${cities[0]})`);
+    } else {
+      filters.push(sql`LOWER(p.city) IN ${sql(cities)}`);
+    }
   }
 
-  // ZIP code
+  // ZIP code (supports comma-separated ZIPs for multi-select)
   if (params.zip_code) {
-    filters.push(sql`p.postal_code = ${params.zip_code}`);
+    const zips = params.zip_code.split(',').map(z => z.trim()).filter(Boolean);
+    if (zips.length === 1) {
+      filters.push(sql`p.postal_code = ${zips[0]}`);
+    } else {
+      filters.push(sql`p.postal_code IN ${sql(zips)}`);
+    }
   }
 
   // Property type
