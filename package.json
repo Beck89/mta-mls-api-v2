@@ -13,8 +13,9 @@
     "start": "node dist/index.js",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed-neighborhoods": "tsx src/db/seed-neighborhoods.ts",
+    "db:seed-areas": "tsx src/db/seed-search-areas.ts",
     "db:refresh-suggestions": "tsx src/db/refresh-suggestions.ts",
-    "db:setup": "npm run db:migrate && npm run db:seed-neighborhoods && npm run db:refresh-suggestions",
+    "db:setup": "npm run db:migrate && npm run db:seed-areas && npm run db:refresh-suggestions",
     "drizzle:introspect": "drizzle-kit introspect",
     "typecheck": "tsc --noEmit"
   },

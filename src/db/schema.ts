@@ -1,13 +1,13 @@
 /**
  * Database schema definitions for the MLS API.
- * 
+ *
  * Tables owned by the Replication Worker (read-only for this API):
  *   - properties, media, members, offices, open_houses, rooms, unit_types
  *   - lookups, raw_responses, price_history, status_history, property_change_log
  *   - replication_runs, replication_requests, media_downloads
- * 
+ *
  * Tables owned by this API server:
- *   - neighborhoods (polygon boundaries for named areas)
+ *   - search_areas (polygon boundaries for cities, counties, zipcodes, neighborhoods)
  *   - search_suggestions (materialized view for typeahead)
  */
 
@@ -347,12 +347,15 @@ export const statusHistory = pgTable('status_history', {
   index('idx_status_history_listing').using('btree', table.listingKey),
 ]);
 
-// ─── Neighborhoods (owned by API server) ─────────────────────────────────────
+// ─── Search Areas (owned by API server) ──────────────────────────────────────
+// Stores polygon boundaries for named geographic areas used in search.
+// type: 'city' | 'county' | 'zipcode' | 'neighborhood'
 
-export const neighborhoods = pgTable('neighborhoods', {
+export const searchAreas = pgTable('search_areas', {
   id: serial('id').primaryKey(),
   name: varchar('name').notNull(),
   slug: varchar('slug').notNull(),
+  type: varchar('type').notNull().default('neighborhood'), // 'city' | 'county' | 'zipcode' | 'neighborhood'
   source: varchar('source'),
   sqMiles: numeric('sq_miles'),
   geom: geometryMultiPolygon('geom'),
@@ -362,8 +365,10 @@ export const neighborhoods = pgTable('neighborhoods', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
-  index('idx_neighborhoods_slug').using('btree', table.slug),
-  unique('neighborhoods_slug_unique').on(table.slug),
+  index('idx_search_areas_slug').using('btree', table.slug),
+  index('idx_search_areas_type').using('btree', table.type),
+  index('idx_search_areas_type_listing_count').using('btree', table.type, table.listingCount),
+  unique('search_areas_type_slug_unique').on(table.type, table.slug),
 ]);
 
 // ─── Search Suggestions (owned by API server) ───────────────────────────────

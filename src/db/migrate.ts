@@ -1,7 +1,9 @@
 /**
  * Database migration script for API-owned tables.
- * Creates: neighborhoods, search_suggestions, trigram indexes.
+ * Creates: search_areas, search_suggestions, trigram indexes.
  * Safe to run multiple times (uses IF NOT EXISTS).
+ *
+ * Also handles migration from the old `neighborhoods` table if it exists.
  */
 
 import postgres from 'postgres';
@@ -17,12 +19,28 @@ async function migrate() {
   await sql`CREATE EXTENSION IF NOT EXISTS postgis`;
   console.log('  ✓ Extensions verified (pg_trgm, postgis)');
 
-  // ─── Neighborhoods table ─────────────────────────────────────────────
+  // ─── Step 1: Rename neighborhoods → search_areas if old table exists ─
+  // Handles upgrading existing deployments that still have the old table name.
+  const oldTableExists = await sql`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'neighborhoods'
+    ) as exists
+  `;
+  if (oldTableExists[0].exists) {
+    console.log('  ℹ️  Found old neighborhoods table — renaming to search_areas...');
+    await sql`ALTER TABLE neighborhoods RENAME TO search_areas`;
+    console.log('  ✓ Renamed neighborhoods → search_areas');
+  }
+
+  // ─── Step 2: Create search_areas if it doesn't exist yet ─────────────
+  // Fresh installs: creates the table. Upgrades: no-op (table already exists).
   await sql`
-    CREATE TABLE IF NOT EXISTS neighborhoods (
+    CREATE TABLE IF NOT EXISTS search_areas (
       id SERIAL PRIMARY KEY,
       name VARCHAR NOT NULL,
       slug VARCHAR NOT NULL,
+      type VARCHAR NOT NULL DEFAULT 'neighborhood',
       source VARCHAR,
       sq_miles NUMERIC,
       geom GEOMETRY(MultiPolygon, 4326),
@@ -33,11 +51,38 @@ async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS neighborhoods_slug_unique ON neighborhoods (slug)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_neighborhoods_slug ON neighborhoods USING btree (slug)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_neighborhoods_geom ON neighborhoods USING gist (geom)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_neighborhoods_name_trgm ON neighborhoods USING gin (name gin_trgm_ops)`;
-  console.log('  ✓ neighborhoods table');
+
+  // ─── Step 3: Ensure type column exists (upgrade path) ────────────────
+  // No-op on fresh installs (column already in CREATE TABLE above).
+  // Adds the column on upgrades from old neighborhoods table.
+  await sql`ALTER TABLE search_areas ADD COLUMN IF NOT EXISTS type VARCHAR NOT NULL DEFAULT 'neighborhood'`;
+
+  // ─── Step 4: Drop old neighborhoods constraints/indexes ───────────────
+  // These linger when the table was renamed but constraints weren't cleaned up.
+  // All DROP IF EXISTS — safe to run on fresh installs too.
+  await sql`ALTER TABLE search_areas DROP CONSTRAINT IF EXISTS neighborhoods_slug_unique`;
+  await sql`DROP INDEX IF EXISTS neighborhoods_slug_unique`;
+  await sql`DROP INDEX IF EXISTS idx_neighborhoods_slug`;
+  await sql`DROP INDEX IF EXISTS idx_neighborhoods_geom`;
+  await sql`DROP INDEX IF EXISTS idx_neighborhoods_name_trgm`;
+
+  // ─── Step 5: Add new search_areas constraints and indexes ────────────
+  // Composite unique: slug must be unique per type (allows "Austin" city + "Austin" county)
+  await sql`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'search_areas_type_slug_unique'
+      ) THEN
+        ALTER TABLE search_areas ADD CONSTRAINT search_areas_type_slug_unique UNIQUE (type, slug);
+      END IF;
+    END $$
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_search_areas_slug ON search_areas USING btree (slug)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_search_areas_type ON search_areas USING btree (type)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_search_areas_type_listing_count ON search_areas USING btree (type, listing_count DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_search_areas_geom ON search_areas USING gist (geom)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_search_areas_name_trgm ON search_areas USING gin (name gin_trgm_ops)`;
+  console.log('  ✓ search_areas table');
 
   // ─── Search Suggestions table ────────────────────────────────────────
   await sql`

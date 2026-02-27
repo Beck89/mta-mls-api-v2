@@ -44,6 +44,7 @@ const searchQuerySchema = z.object({
   neighborhood: z.string().optional(),
   city: z.string().optional(),
   zip_code: z.string().optional(),
+  county: z.string().optional(),
 
   // Property characteristics
   property_type: z.string().optional(),
@@ -172,38 +173,69 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
     }
   }
 
-  // Named neighborhood (supports comma-separated slugs for multi-select)
+  // Named neighborhood — always polygon-backed (search_areas WHERE type = 'neighborhood')
   if (params.neighborhood) {
     const slugs = params.neighborhood.split(',').map(s => s.trim()).filter(Boolean);
-    if (slugs.length === 1) {
-      filters.push(
-        sql`ST_Within(p.geog::geometry, (SELECT geom FROM neighborhoods WHERE slug = ${slugs[0]} LIMIT 1))`
-      );
-    } else {
-      filters.push(
-        sql`ST_Within(p.geog::geometry, (SELECT ST_Union(geom) FROM neighborhoods WHERE slug = ANY(${slugs})))`
-      );
-    }
+    filters.push(
+      sql`ST_Within(p.geog::geometry, (
+        SELECT ST_Union(geom) FROM search_areas
+        WHERE type = 'neighborhood' AND slug = ANY(${slugs})
+      ))`
+    );
   }
 
-  // City (supports comma-separated cities for multi-select)
+  // City — polygon-backed if slug exists in search_areas, text fallback otherwise
+  // search_suggestions stores slug as search_value for polygon cities, raw city name for text-only cities
   if (params.city) {
-    const cities = params.city.split(',').map(c => c.trim().toLowerCase()).filter(Boolean);
-    if (cities.length === 1) {
-      filters.push(sql`LOWER(p.city) = LOWER(${cities[0]})`);
-    } else {
-      filters.push(sql`LOWER(p.city) IN ${sql(cities)}`);
-    }
+    const values = params.city.split(',').map(c => c.trim()).filter(Boolean);
+    // Check which values have polygon coverage in search_areas
+    // We do this inline via a CASE expression to avoid an extra round-trip
+    filters.push(
+      sql`(
+        -- Polygon match: value is a slug in search_areas (polygon-backed city)
+        ST_Within(p.geog::geometry, (
+          SELECT ST_Union(geom) FROM search_areas
+          WHERE type = 'city' AND slug = ANY(${values})
+        ))
+        OR
+        -- Text fallback: value is a raw city name (no polygon data)
+        (
+          NOT EXISTS (SELECT 1 FROM search_areas WHERE type = 'city' AND slug = ANY(${values}))
+          AND LOWER(p.city) = ANY(${values.map((v: string) => v.toLowerCase())})
+        )
+      )`
+    );
   }
 
-  // ZIP code (supports comma-separated ZIPs for multi-select)
+  // ZIP code — polygon-backed if slug exists in search_areas, text fallback otherwise
   if (params.zip_code) {
-    const zips = params.zip_code.split(',').map(z => z.trim()).filter(Boolean);
-    if (zips.length === 1) {
-      filters.push(sql`p.postal_code = ${zips[0]}`);
-    } else {
-      filters.push(sql`p.postal_code IN ${sql(zips)}`);
-    }
+    const values = params.zip_code.split(',').map(z => z.trim()).filter(Boolean);
+    filters.push(
+      sql`(
+        -- Polygon match: value is a slug in search_areas (polygon-backed zipcode)
+        ST_Within(p.geog::geometry, (
+          SELECT ST_Union(geom) FROM search_areas
+          WHERE type = 'zipcode' AND slug = ANY(${values})
+        ))
+        OR
+        -- Text fallback: value is a raw postal_code (no polygon data)
+        (
+          NOT EXISTS (SELECT 1 FROM search_areas WHERE type = 'zipcode' AND slug = ANY(${values}))
+          AND p.postal_code = ANY(${values})
+        )
+      )`
+    );
+  }
+
+  // County — always polygon-backed (new parameter)
+  if (params.county) {
+    const slugs = params.county.split(',').map(s => s.trim()).filter(Boolean);
+    filters.push(
+      sql`ST_Within(p.geog::geometry, (
+        SELECT ST_Union(geom) FROM search_areas
+        WHERE type = 'county' AND slug = ANY(${slugs})
+      ))`
+    );
   }
 
   // Property type
