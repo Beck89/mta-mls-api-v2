@@ -177,9 +177,7 @@ function formatPropertyDetail(
 
   return {
     ids: {
-      listing_key: row.listing_key,
-      listing_id: row.listing_id,
-      listing_id_display: row.listing_id_display,
+      listing_id: row.listing_id_display || row.listing_id,
       mls: row.originating_system,
     },
     status: {

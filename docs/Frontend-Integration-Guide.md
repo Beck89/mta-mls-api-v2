@@ -192,8 +192,7 @@ GET /api/listings/search
 {
   "data": [
     {
-      "listing_key": "ACT218251278",
-      "listing_id": "ACT7522990",
+      "listing_id": "7522990",
       "standard_status": "Active",
       "list_price": 400000,
       "price_per_sqft": 219.06,
@@ -257,7 +256,7 @@ When `include_map_pins=true` is passed, the response includes an additional `map
 {
   "map_pins": [
     {
-      "id": "ACT218251278",
+      "id": "7522990",
       "lat": 30.1787,
       "lng": -97.7929,
       "price": 400000,
@@ -268,7 +267,7 @@ When `include_map_pins=true` is passed, the response includes an additional `map
     }
   ],
   "data": [
-    { "listing_key": "ACT218251278", "list_price": 400000, "photo_urls": [...], ... }
+    { "listing_id": "7522990", "list_price": 400000, "photo_urls": [...], ... }
   ],
   "metadata": {
     "total_listings_count": 33882,
@@ -292,7 +291,7 @@ When `include_map_pins=true` is passed, the response includes an additional `map
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `id` | string | Same as `listing_key` — use to correlate with card data |
+| `id` | string | The `listing_id` (display ID) — use to correlate with card data and for detail navigation |
 | `lat` | number | Latitude |
 | `lng` | number | Longitude |
 | `price` | number | List price |
@@ -375,7 +374,7 @@ GET /api/listings
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `listing_id` | string | Conditional* | Listing key (e.g., `ACT209777414`) |
+| `listing_id` | string | Conditional* | MLS display ID (e.g., `7522990`) |
 | `address` | string | Conditional* | Address with hyphens (e.g., `508-echo-pass`) |
 | `city` | string | Conditional* | City with hyphens (e.g., `liberty-hill`) |
 
@@ -388,7 +387,7 @@ Returns a comprehensive `listing` object with nested sections:
 ```json
 {
   "listing": {
-    "ids": { "listing_key", "listing_id", "listing_id_display", "mls" },
+    "ids": { "listing_id", "mls" },
     "status": { "standard_status", "mls_status", "listing_date", "days_on_market", "last_modified", "back_on_market", "back_on_market_date" },
     "pricing": { "current_price", "original_price", "previous_price", "price_reduction", "price_reduction_percentage", "price_per_sqft", "last_price_change" },
     "property_details": { "type", "category", "condition", "year_built", "architectural_style" },
@@ -422,8 +421,8 @@ Returns a comprehensive `listing` object with nested sections:
 ### Example Requests
 
 ```bash
-# By listing key
-GET /api/listings?listing_id=ACT209777414
+# By listing display ID
+GET /api/listings?listing_id=7522990
 
 # By address + city (SEO-friendly URLs)
 GET /api/listings?address=508-echo-pass&city=liberty-hill
@@ -442,15 +441,15 @@ GET /api/listings/batch
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ids` | string | Yes | Comma-separated listing keys (max 50) |
+| `ids` | string | Yes | Comma-separated listing IDs (display IDs, max 50) |
 
 ### Response Format
 
 ```json
 {
   "listings": [ /* same structure as single detail */ ],
-  "found": ["ACT118922373", "ACT118922374"],
-  "not_found": ["ACT118922375"]
+  "found": ["7522990", "7654321"],
+  "not_found": ["9999999"]
 }
 ```
 
@@ -508,7 +507,6 @@ If fewer than 4 results are found within the initial radius, the search automati
 {
   "subject": {
     "listing_id": "7522990",
-    "listing_key": "ACT218251278",
     "standard_status": "Active",
     "list_price": 450000,
     "bedrooms_total": 3,
@@ -696,7 +694,7 @@ GET /api/suggest
 | `zip` | ZIP code | `?zip_code={search_value}` |
 | `subdivision` | Subdivision name | `?keywords={search_value}` |
 | `neighborhood` | Neighborhood slug | `?neighborhood={search_value}` + fetch polygon |
-| `address` | Listing key | Navigate to `/listing/{search_value}` |
+| `address` | Listing display ID | Navigate to `/listing/{search_value}` |
 
 ### Frontend Integration
 
@@ -915,7 +913,7 @@ If metadata.map_pins_truncated === true:
 
 ```typescript
 interface MapPin {
-  id: string;        // listing_key
+  id: string;        // listing_id (display ID)
   lat: number;
   lng: number;
   price: number;
@@ -945,7 +943,7 @@ interface SearchResponse {
 
 ```typescript
 interface ListingCard {
-  listing_key: string;
+  listing_id: string;
   list_price: number;
   bedrooms_total: number;
   bathrooms_total: number;
@@ -966,11 +964,11 @@ interface ListingCard {
 ### SEO-Friendly Listing URLs
 
 ```
-/listing/{listing_id_display}/{slugified-address}
+/listing/{listing_id}/{slugified-address}
 Example: /listing/7522990/424-baldridge-dr-austin-tx-78748
 ```
 
-Use `listing_key` for API lookups, `listing_id_display` (prefix stripped) for display URLs.
+Use `listing_id` for both API lookups and display URLs — it is the MLS-approved display ID.
 
 ---
 

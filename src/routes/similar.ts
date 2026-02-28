@@ -353,7 +353,6 @@ function formatSimilarResult(row: any) {
 function formatSubjectSummary(row: any) {
   return {
     listing_id: row.listing_id_display || row.listing_id,
-    listing_key: row.listing_key,
     standard_status: row.standard_status,
     list_price: parseFloat(row.list_price) || 0,
     bedrooms_total: parseFloat(row.bedrooms_total) || null,

@@ -94,7 +94,25 @@ The `listing_id` parameter now resolves the **display ID** first, then falls bac
 GET /api/listings?listing_key=abc123-internal-key
 ```
 
-The detail response is unchanged — it still returns the full property detail object with `ids.listing_id_display`.
+The detail response now returns a simplified `ids` block with just `listing_id` (the display ID) and `mls`. The internal `listing_key` and raw `listing_id` are no longer exposed.
+
+**Detail `ids` block — before:**
+```json
+"ids": {
+  "listing_key": "ACT218251278",
+  "listing_id": "ACT7522990",
+  "listing_id_display": "7522990",
+  "mls": "ACTRIS"
+}
+```
+
+**Detail `ids` block — after:**
+```json
+"ids": {
+  "listing_id": "7522990",
+  "mls": "ACTRIS"
+}
+```
 
 ### Typeahead Address Suggestions (`GET /api/suggest`)
 
@@ -156,9 +174,34 @@ function onAddressSelect(suggestion) {
 }
 ```
 
+### Similar Homes (`GET /api/listings/similar`)
+
+The `subject` object no longer includes `listing_key`:
+
+**Before:**
+```json
+{
+  "subject": {
+    "listing_id": "7522990",
+    "listing_key": "ACT218251278",
+    ...
+  }
+}
+```
+
+**After:**
+```json
+{
+  "subject": {
+    "listing_id": "7522990",
+    ...
+  }
+}
+```
+
 ### Displaying the MLS Number
 
-The `listing_id` in search results is the MLS-approved display ID. You can show it directly:
+The `listing_id` in all responses is the MLS-approved display ID. You can show it directly:
 
 ```html
 <span class="mls-number">MLS# {{ listing.listing_id }}</span>
