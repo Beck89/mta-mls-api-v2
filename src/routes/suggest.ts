@@ -8,6 +8,7 @@
  * Performance optimizations:
  *   - GIN gin_trgm_ops index on COALESCE(match_text, label) for operator-accelerated matching
  *   - UNION ALL structure to let each branch use the index independently
+ *   - Per-type slot reservation ensures result diversity (cities don't get buried by subdivisions)
  *   - LRU in-memory cache (search_suggestions is a pre-materialized table)
  */
 
@@ -57,11 +58,16 @@ export function clearSuggestCache(): void {
   cache.clear();
 }
 
+// ─── Per-type slot reservation ───────────────────────────────────────────────
+// Guarantee each type gets at least RESERVED_PER_TYPE slots so that high-priority
+// types (cities, neighborhoods) aren't buried by a flood of subdivisions/addresses.
+const RESERVED_PER_TYPE = 3;
+
 // ─── Route ───────────────────────────────────────────────────────────────────
 
 const suggestQuerySchema = z.object({
   q: z.string().min(1),
-  limit: z.coerce.number().int().min(1).max(20).default(10),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
   types: z.string().optional(), // comma-separated: 'city,zip,subdivision,neighborhood,address'
 });
 
@@ -90,32 +96,56 @@ export async function suggestRoutes(app: FastifyInstance) {
 
       let results;
 
-      if (q.length < 3) {
-        // ─── Short query: prefix match (btree ILIKE) ─────────────────
+      // Numeric queries (ZIP codes like "78749") should use prefix-only matching,
+      // not trigram fuzzy matching — otherwise "78749" also returns "78748", "78746", etc.
+      const isNumericQuery = /^\d+$/.test(q);
+
+      if (q.length < 3 || isNumericQuery) {
+        // ─── Short query or ZIP code: prefix match with per-type diversity ─
         results = await sql`
+          WITH raw_matches AS (
+            SELECT
+              id, label, type, search_value, search_param,
+              has_polygon, latitude, longitude, listing_count, priority,
+              1.0 as score
+            FROM search_suggestions
+            WHERE (
+              COALESCE(match_text, label) ILIKE ${q + '%'}
+              OR label ILIKE ${q + '%'}
+            )
+              ${typeList && typeList.length > 0 ? sql`AND type = ANY(${typeList})` : sql``}
+          ),
+          ranked AS (
+            SELECT *,
+              ROW_NUMBER() OVER (
+                PARTITION BY type
+                ORDER BY
+                  CASE WHEN COALESCE(match_text, label) ILIKE ${q + '%'} THEN 0 ELSE 1 END,
+                  priority DESC,
+                  listing_count DESC NULLS LAST
+              ) as type_rank
+            FROM raw_matches
+          )
+          -- Reserved slots first (top N per type), then fill remaining by overall relevance
           SELECT
             id, label, type, search_value, search_param,
             has_polygon, latitude, longitude, listing_count, priority,
-            1.0 as score
-          FROM search_suggestions
-          WHERE (
-            COALESCE(match_text, label) ILIKE ${q + '%'}
-            OR label ILIKE ${q + '%'}
-          )
-            ${typeList && typeList.length > 0 ? sql`AND type = ANY(${typeList})` : sql``}
+            score, type_rank
+          FROM ranked
           ORDER BY
-            CASE WHEN COALESCE(match_text, label) ILIKE ${q + '%'} THEN 0 ELSE 1 END,
+            CASE WHEN type_rank <= ${RESERVED_PER_TYPE} THEN 0 ELSE 1 END,
             priority DESC,
+            CASE WHEN COALESCE(match_text, label) ILIKE ${q + '%'} THEN 0 ELSE 1 END,
             listing_count DESC NULLS LAST
           LIMIT ${limit}
         `;
       } else {
-        // ─── Longer query: trigram similarity (GIN-accelerated) ───────
+        // ─── Longer query: trigram similarity with per-type diversity ───
         // Uses UNION ALL so each branch can independently use the GIN index.
         //   Branch 1: exact prefix matches (highest relevance)
         //   Branch 2: trigram similarity via % and <%> operators
         //   Branch 3: word-boundary prefix match (ILIKE '% query%')
-        // DISTINCT ON (id) deduplicates rows that match multiple branches.
+        // Then ROW_NUMBER() OVER (PARTITION BY type) ensures diversity.
         results = await sql`
           WITH matches AS (
             -- Branch 1: Exact prefix matches (fastest, most relevant)
@@ -166,9 +196,23 @@ export async function suggestRoutes(app: FastifyInstance) {
             SELECT DISTINCT ON (id) *
             FROM matches
             ORDER BY id, rank_group, score DESC
+          ),
+          ranked AS (
+            SELECT *,
+              ROW_NUMBER() OVER (
+                PARTITION BY type
+                ORDER BY rank_group, score DESC, listing_count DESC NULLS LAST
+              ) as type_rank
+            FROM deduped
           )
-          SELECT * FROM deduped
+          -- Reserved slots first (top N per type), then fill remaining by overall relevance
+          SELECT
+            id, label, type, search_value, search_param,
+            has_polygon, latitude, longitude, listing_count, priority,
+            score, rank_group, type_rank
+          FROM ranked
           ORDER BY
+            CASE WHEN type_rank <= ${RESERVED_PER_TYPE} THEN 0 ELSE 1 END,
             rank_group,
             score DESC,
             priority DESC,
