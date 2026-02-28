@@ -14,12 +14,13 @@ import { env } from '../config/env.js';
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
 const detailQuerySchema = z.object({
-  listing_id: z.string().optional(),
+  listing_id: z.string().optional(),   // MLS display ID (e.g., "1234567") — public-facing
+  listing_key: z.string().optional(),  // Internal listing key — for backward compatibility
   address: z.string().optional(),
   city: z.string().optional(),
 }).refine(
-  (data) => data.listing_id || (data.address && data.city),
-  { message: 'Must provide either listing_id or both address and city' }
+  (data) => data.listing_id || data.listing_key || (data.address && data.city),
+  { message: 'Must provide listing_id, listing_key, or both address and city' }
 );
 
 const batchQuerySchema = z.object({
@@ -274,13 +275,29 @@ export async function detailRoutes(app: FastifyInstance) {
       });
     }
 
-    const { listing_id, address, city } = parseResult.data;
+    const { listing_id, listing_key, address, city } = parseResult.data;
 
     try {
       let listingKey: string | null = null;
 
-      if (listing_id) {
-        listingKey = listing_id;
+      if (listing_key) {
+        // Direct listing_key lookup (internal/backward-compatible)
+        listingKey = listing_key;
+      } else if (listing_id) {
+        // Resolve listing_id_display → listing_key
+        const result = await sql`
+          SELECT listing_key FROM properties
+          WHERE listing_id_display = ${listing_id}
+            AND mlg_can_view = true
+            AND 'IDX' = ANY(mlg_can_use)
+          LIMIT 1
+        `;
+        if (result.length > 0) {
+          listingKey = result[0].listing_key;
+        } else {
+          // Fallback: try as listing_key directly (backward compatibility)
+          listingKey = listing_id;
+        }
       } else if (address && city) {
         // Address lookup: convert hyphens back to spaces, normalize whitespace
         const addressSearch = address.replace(/-/g, ' ').trim();

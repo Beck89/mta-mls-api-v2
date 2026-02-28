@@ -247,7 +247,7 @@ export async function refreshSuggestions(client?: ReturnType<typeof postgres>) {
       COALESCE(unparsed_address, '') || ', ' || COALESCE(INITCAP(city), '') || ', ' || COALESCE(state_or_province, 'TX') || ' ' || COALESCE(postal_code, '') AS label,
       unparsed_address AS match_text,
       'address' AS type,
-      listing_key AS search_value,
+      COALESCE(listing_id_display, listing_id, listing_key) AS search_value,
       null AS search_param,
       false AS has_polygon,
       latitude::numeric AS latitude,

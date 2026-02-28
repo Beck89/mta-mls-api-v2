@@ -407,8 +407,7 @@ function formatSearchResult(row: any) {
   }
 
   return {
-    listing_key: row.listing_key,
-    listing_id: row.listing_id,
+    listing_id: row.listing_id_display || row.listing_id,
     standard_status: row.standard_status,
     list_price: listPrice,
     price_per_sqft: livingArea > 0 ? Math.round((listPrice / livingArea) * 100) / 100 : null,
@@ -451,7 +450,7 @@ function formatSearchResult(row: any) {
 
 function formatMapPin(row: any) {
   return {
-    id: row.listing_key,
+    id: row.listing_id_display || row.listing_id || row.listing_key,
     lat: parseFloat(row.latitude),
     lng: parseFloat(row.longitude),
     price: parseFloat(row.list_price) || 0,
@@ -465,6 +464,8 @@ function formatMapPin(row: any) {
 // ─── Map pin select fields (lightweight — no JOINs needed) ──────────────────
 
 const MAP_PIN_FIELDS = sql`
+  p.listing_id_display,
+  p.listing_id,
   p.listing_key,
   p.latitude,
   p.longitude,
@@ -483,6 +484,7 @@ const MAP_PIN_FIELDS = sql`
 const SELECT_FIELDS = sql`
   p.listing_key,
   p.listing_id,
+  p.listing_id_display,
   p.standard_status,
   p.list_price,
   p.original_list_price,
