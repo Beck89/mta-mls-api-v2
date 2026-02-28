@@ -89,16 +89,24 @@ async function migrate() {
     CREATE TABLE IF NOT EXISTS search_suggestions (
       id SERIAL PRIMARY KEY,
       label VARCHAR NOT NULL,
+      match_text VARCHAR,
       type VARCHAR NOT NULL,
       search_value VARCHAR,
+      search_param VARCHAR,
+      has_polygon BOOLEAN DEFAULT false,
       latitude NUMERIC,
       longitude NUMERIC,
       listing_count INTEGER,
       priority INTEGER DEFAULT 0
     )
   `;
+  // Add new columns if upgrading from older schema (safe no-ops if already exist)
+  await sql`ALTER TABLE search_suggestions ADD COLUMN IF NOT EXISTS search_param VARCHAR`;
+  await sql`ALTER TABLE search_suggestions ADD COLUMN IF NOT EXISTS has_polygon BOOLEAN DEFAULT false`;
+  await sql`ALTER TABLE search_suggestions ADD COLUMN IF NOT EXISTS match_text VARCHAR`;
   await sql`CREATE INDEX IF NOT EXISTS idx_suggestions_type ON search_suggestions USING btree (type)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_suggestions_label_trgm ON search_suggestions USING gin (label gin_trgm_ops)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_suggestions_match_text_trgm ON search_suggestions USING gin (match_text gin_trgm_ops)`;
   console.log('  ✓ search_suggestions table');
 
   // ─── Trigram indexes on properties for fast search ───────────────────

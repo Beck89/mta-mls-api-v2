@@ -37,60 +37,87 @@ export async function suggestRoutes(app: FastifyInstance) {
       let results;
 
       if (q.length < 3) {
-        // Prefix match for very short queries
+        // Prefix match for very short queries — match against match_text (street address only)
+        // or label for non-address types. Falls back to label if match_text is null.
         results = await sql`
-          SELECT 
+          SELECT
             id,
             label,
             type,
             search_value,
+            search_param,
+            has_polygon,
             latitude,
             longitude,
             listing_count,
             priority,
             1.0 as score
           FROM search_suggestions
-          WHERE label ILIKE ${q + '%'}
+          WHERE (
+            COALESCE(match_text, label) ILIKE ${q + '%'}
+            OR label ILIKE ${q + '%'}
+          )
             ${typeList && typeList.length > 0 ? sql`AND type = ANY(${typeList})` : sql``}
-          ORDER BY priority DESC, listing_count DESC NULLS LAST
+          ORDER BY
+            -- Exact prefix match on match_text first (most relevant)
+            CASE WHEN COALESCE(match_text, label) ILIKE ${q + '%'} THEN 0 ELSE 1 END,
+            priority DESC,
+            listing_count DESC NULLS LAST
           LIMIT ${limit}
         `;
       } else {
-        // Trigram similarity for longer queries — combines similarity score with prefix bonus
+        // Trigram similarity — match against match_text (street address only for addresses,
+        // city/area name for others). This prevents city/state/ZIP from diluting address scores.
         results = await sql`
-          SELECT 
+          SELECT
             id,
             label,
             type,
             search_value,
+            search_param,
+            has_polygon,
             latitude,
             longitude,
             listing_count,
             priority,
             GREATEST(
-              similarity(label, ${q}),
-              word_similarity(${q}, label)
+              similarity(COALESCE(match_text, label), ${q}),
+              word_similarity(${q}, COALESCE(match_text, label))
             ) as score
           FROM search_suggestions
           WHERE (
-            similarity(label, ${q}) > 0.1
-            OR word_similarity(${q}, label) > 0.2
-            OR label ILIKE ${q + '%'}
-            OR label ILIKE ${'% ' + q + '%'}
+            similarity(COALESCE(match_text, label), ${q}) > 0.1
+            OR word_similarity(${q}, COALESCE(match_text, label)) > 0.2
+            OR COALESCE(match_text, label) ILIKE ${q + '%'}
+            OR COALESCE(match_text, label) ILIKE ${'% ' + q + '%'}
           )
             ${typeList && typeList.length > 0 ? sql`AND type = ANY(${typeList})` : sql``}
-          ORDER BY 
-            -- Exact prefix matches first
-            CASE WHEN label ILIKE ${q + '%'} THEN 0 ELSE 1 END,
-            -- Then by priority (cities > neighborhoods > zips > subdivisions > addresses)
-            priority DESC,
-            -- Then by similarity score
+          ORDER BY
+            -- Exact prefix matches on match_text first
+            CASE WHEN COALESCE(match_text, label) ILIKE ${q + '%'} THEN 0 ELSE 1 END,
+            -- Similarity score second — high-relevance matches beat lower-priority types
             score DESC,
-            -- Then by listing count
+            -- Priority as tiebreaker (cities > neighborhoods > zips > subdivisions > addresses)
+            priority DESC,
+            -- Listing count as final tiebreaker
             listing_count DESC NULLS LAST
           LIMIT ${limit}
         `;
       }
+
+      // Helper to format a single suggestion row
+      const formatSuggestion = (row: any) => ({
+        label: row.label,
+        type: row.type,
+        search_value: row.search_value,
+        search_param: row.search_param ?? null,
+        has_polygon: row.has_polygon ?? false,
+        listing_count: row.listing_count,
+        location: row.latitude && row.longitude ? {
+          lat: parseFloat(row.latitude),
+          lng: parseFloat(row.longitude),
+        } : null,
+      });
 
       // Group results by type
       const grouped: Record<string, any[]> = {};
@@ -98,29 +125,11 @@ export async function suggestRoutes(app: FastifyInstance) {
         if (!grouped[row.type]) {
           grouped[row.type] = [];
         }
-        grouped[row.type].push({
-          label: row.label,
-          type: row.type,
-          search_value: row.search_value,
-          listing_count: row.listing_count,
-          location: row.latitude && row.longitude ? {
-            lat: parseFloat(row.latitude),
-            lng: parseFloat(row.longitude),
-          } : null,
-        });
+        grouped[row.type].push(formatSuggestion(row));
       }
 
       // Flatten into ordered array with type grouping preserved
-      const suggestions = results.map((row: any) => ({
-        label: row.label,
-        type: row.type,
-        search_value: row.search_value,
-        listing_count: row.listing_count,
-        location: row.latitude && row.longitude ? {
-          lat: parseFloat(row.latitude),
-          lng: parseFloat(row.longitude),
-        } : null,
-      }));
+      const suggestions = results.map((row: any) => formatSuggestion(row));
 
       return {
         suggestions,

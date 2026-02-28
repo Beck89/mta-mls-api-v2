@@ -375,9 +375,12 @@ export const searchAreas = pgTable('search_areas', {
 
 export const searchSuggestions = pgTable('search_suggestions', {
   id: serial('id').primaryKey(),
-  label: varchar('label').notNull(),
-  type: varchar('type').notNull(), // 'address', 'city', 'zip', 'subdivision', 'neighborhood'
+  label: varchar('label').notNull(),           // Display text shown in the dropdown
+  matchText: varchar('match_text'),             // Text used for trigram matching (street address only for addresses)
+  type: varchar('type').notNull(), // 'address' | 'city' | 'zip' | 'county' | 'subdivision' | 'neighborhood'
   searchValue: varchar('search_value'),
+  searchParam: varchar('search_param'), // query param name: 'city' | 'zip_code' | 'county' | 'neighborhood' | 'keywords'
+  hasPolygon: boolean('has_polygon').default(false), // true = polygon-backed (can fetch GeoJSON boundary)
   latitude: numeric('latitude'),
   longitude: numeric('longitude'),
   listingCount: integer('listing_count'),
@@ -385,6 +388,7 @@ export const searchSuggestions = pgTable('search_suggestions', {
 }, (table) => [
   index('idx_suggestions_type').using('btree', table.type),
   index('idx_suggestions_label_trgm').using('gin', table.label),
+  index('idx_suggestions_match_text_trgm').using('gin', table.matchText),
 ]);
 
 // ─── Relations ───────────────────────────────────────────────────────────────

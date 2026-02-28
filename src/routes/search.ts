@@ -173,10 +173,21 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
     }
   }
 
-  // Named neighborhood — always polygon-backed (search_areas WHERE type = 'neighborhood')
+  // ─── Area filters (union / OR logic across all area types) ───────────────
+  // When multiple area types are specified (e.g., zip_code + neighborhood + county),
+  // listings matching ANY of the selected areas are returned (union, not intersection).
+  // Within a single parameter, comma-separated values are also unioned.
+  //
+  // Each area type contributes one OR branch:
+  //   - neighborhood / county: always polygon-backed (ST_Within)
+  //   - city / zip: polygon-backed if slug exists in search_areas, text fallback otherwise
+  //
+  // All active area conditions are collected and combined into a single OR expression.
+  const areaConditions: ReturnType<typeof sql>[] = [];
+
   if (params.neighborhood) {
     const slugs = params.neighborhood.split(',').map(s => s.trim()).filter(Boolean);
-    filters.push(
+    areaConditions.push(
       sql`ST_Within(p.geog::geometry, (
         SELECT ST_Union(geom) FROM search_areas
         WHERE type = 'neighborhood' AND slug = ANY(${slugs})
@@ -184,22 +195,15 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
     );
   }
 
-  // City — polygon-backed if slug exists in search_areas, text fallback otherwise
-  // search_suggestions stores slug as search_value for polygon cities, raw city name for text-only cities
   if (params.city) {
     const values = params.city.split(',').map(c => c.trim()).filter(Boolean);
-    // Check which values have polygon coverage in search_areas
-    // We do this inline via a CASE expression to avoid an extra round-trip
-    filters.push(
+    areaConditions.push(
       sql`(
-        -- Polygon match: value is a slug in search_areas (polygon-backed city)
         ST_Within(p.geog::geometry, (
           SELECT ST_Union(geom) FROM search_areas
           WHERE type = 'city' AND slug = ANY(${values})
         ))
-        OR
-        -- Text fallback: value is a raw city name (no polygon data)
-        (
+        OR (
           NOT EXISTS (SELECT 1 FROM search_areas WHERE type = 'city' AND slug = ANY(${values}))
           AND LOWER(p.city) = ANY(${values.map((v: string) => v.toLowerCase())})
         )
@@ -207,19 +211,15 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
     );
   }
 
-  // ZIP code — polygon-backed if slug exists in search_areas, text fallback otherwise
   if (params.zip_code) {
     const values = params.zip_code.split(',').map(z => z.trim()).filter(Boolean);
-    filters.push(
+    areaConditions.push(
       sql`(
-        -- Polygon match: value is a slug in search_areas (polygon-backed zipcode)
         ST_Within(p.geog::geometry, (
           SELECT ST_Union(geom) FROM search_areas
           WHERE type = 'zipcode' AND slug = ANY(${values})
         ))
-        OR
-        -- Text fallback: value is a raw postal_code (no polygon data)
-        (
+        OR (
           NOT EXISTS (SELECT 1 FROM search_areas WHERE type = 'zipcode' AND slug = ANY(${values}))
           AND p.postal_code = ANY(${values})
         )
@@ -227,15 +227,22 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
     );
   }
 
-  // County — always polygon-backed (new parameter)
   if (params.county) {
     const slugs = params.county.split(',').map(s => s.trim()).filter(Boolean);
-    filters.push(
+    areaConditions.push(
       sql`ST_Within(p.geog::geometry, (
         SELECT ST_Union(geom) FROM search_areas
         WHERE type = 'county' AND slug = ANY(${slugs})
       ))`
     );
+  }
+
+  // Combine all area conditions with OR (union) — a listing matches if it's in ANY selected area
+  if (areaConditions.length === 1) {
+    filters.push(areaConditions[0]);
+  } else if (areaConditions.length > 1) {
+    const combined = areaConditions.reduce((acc, cond) => sql`${acc} OR ${cond}`);
+    filters.push(sql`(${combined})`);
   }
 
   // Property type
