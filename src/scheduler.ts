@@ -12,6 +12,7 @@
 
 import { FastifyBaseLogger } from 'fastify';
 import { refreshSuggestions } from './db/refresh-suggestions.js';
+import { clearSuggestCache } from './routes/suggest.js';
 
 // How often to refresh suggestions (default: 30 minutes)
 // The refresh takes ~30-60s, so running every 10 min would mean near-continuous rebuilds.
@@ -38,8 +39,9 @@ async function runRefreshSuggestions(logger: FastifyBaseLogger) {
 
   try {
     await refreshSuggestions();
+    clearSuggestCache();
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-    logger.info(`scheduler: refresh-suggestions completed in ${elapsed}s`);
+    logger.info(`scheduler: refresh-suggestions completed in ${elapsed}s (suggest cache cleared)`);
   } catch (err) {
     logger.error(err, 'scheduler: refresh-suggestions failed');
   } finally {

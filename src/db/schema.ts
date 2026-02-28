@@ -389,6 +389,9 @@ export const searchSuggestions = pgTable('search_suggestions', {
   index('idx_suggestions_type').using('btree', table.type),
   index('idx_suggestions_label_trgm').using('gin', table.label),
   index('idx_suggestions_match_text_trgm').using('gin', table.matchText),
+  // NOTE: Additional indexes created in migrate.ts (not expressible in Drizzle):
+  //   idx_suggestions_coalesce_trgm  — GIN gin_trgm_ops on COALESCE(match_text, label)
+  //   idx_suggestions_type_priority  — btree (type, priority DESC, listing_count DESC)
 ]);
 
 // ─── Relations ───────────────────────────────────────────────────────────────

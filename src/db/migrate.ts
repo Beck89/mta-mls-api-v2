@@ -19,6 +19,14 @@ async function migrate() {
   await sql`CREATE EXTENSION IF NOT EXISTS postgis`;
   console.log('  ✓ Extensions verified (pg_trgm, postgis)');
 
+  // ─── Set pg_trgm thresholds for the % and <%> operators ─────────────
+  // These persist across all future sessions on this database.
+  const dbNameResult = await sql`SELECT current_database() as name`;
+  const dbName = dbNameResult[0].name;
+  await sql.unsafe(`ALTER DATABASE "${dbName}" SET pg_trgm.similarity_threshold = 0.1`);
+  await sql.unsafe(`ALTER DATABASE "${dbName}" SET pg_trgm.word_similarity_threshold = 0.2`);
+  console.log('  ✓ pg_trgm thresholds set (similarity=0.1, word_similarity=0.2)');
+
   // ─── Step 1: Rename neighborhoods → search_areas if old table exists ─
   // Handles upgrading existing deployments that still have the old table name.
   const oldTableExists = await sql`
@@ -107,6 +115,15 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_suggestions_type ON search_suggestions USING btree (type)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_suggestions_label_trgm ON search_suggestions USING gin (label gin_trgm_ops)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_suggestions_match_text_trgm ON search_suggestions USING gin (match_text gin_trgm_ops)`;
+
+  // ─── Expression index for COALESCE(match_text, label) — the actual expression used in queries
+  // This is the critical index for typeahead performance. The % and <%> operators
+  // require gin_trgm_ops on the exact expression used in the WHERE clause.
+  await sql`CREATE INDEX IF NOT EXISTS idx_suggestions_coalesce_trgm ON search_suggestions USING gin (COALESCE(match_text, label) gin_trgm_ops)`;
+
+  // ─── Composite index for type-filtered queries with priority/listing_count sort
+  await sql`CREATE INDEX IF NOT EXISTS idx_suggestions_type_priority ON search_suggestions USING btree (type, priority DESC, listing_count DESC NULLS LAST)`;
+
   console.log('  ✓ search_suggestions table');
 
   // ─── Trigram indexes on properties for fast search ───────────────────
