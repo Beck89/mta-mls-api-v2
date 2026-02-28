@@ -5,6 +5,7 @@ import sensible from '@fastify/sensible';
 import { env } from './config/env.js';
 import { searchRoutes } from './routes/search.js';
 import { detailRoutes } from './routes/detail.js';
+import { similarRoutes } from './routes/similar.js';
 import { suggestRoutes } from './routes/suggest.js';
 import { statsRoutes } from './routes/stats.js';
 import { healthRoutes } from './routes/health.js';
@@ -54,6 +55,7 @@ export function buildServer() {
   // ─── Routes ──────────────────────────────────────────────────────────
   app.register(searchRoutes, { prefix: '/api/listings' });
   app.register(detailRoutes, { prefix: '/api/listings' });
+  app.register(similarRoutes, { prefix: '/api/listings' });
   app.register(suggestRoutes, { prefix: '/api' });
   app.register(statsRoutes, { prefix: '/api' });
   app.register(healthRoutes);

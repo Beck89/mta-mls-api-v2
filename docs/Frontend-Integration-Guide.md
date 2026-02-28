@@ -14,11 +14,12 @@ Complete reference for integrating the new API into the Astro + React frontend. 
 2. [Search Listings](#search-listings)
 3. [Property Detail](#property-detail)
 4. [Batch Property Details](#batch-property-details)
-5. [Typeahead / Suggestions](#typeahead--suggestions)
-6. [Neighborhoods](#neighborhoods)
-7. [Stats](#stats)
-8. [Key Differences from Legacy API](#key-differences-from-legacy-api)
-9. [Frontend Integration Patterns](#frontend-integration-patterns)
+5. [Similar Homes](#similar-homes)
+6. [Typeahead / Suggestions](#typeahead--suggestions)
+7. [Neighborhoods](#neighborhoods)
+8. [Stats](#stats)
+9. [Key Differences from Legacy API](#key-differences-from-legacy-api)
+10. [Frontend Integration Patterns](#frontend-integration-patterns)
 
 ---
 
@@ -451,6 +452,194 @@ GET /api/listings/batch
   "found": ["ACT118922373", "ACT118922374"],
   "not_found": ["ACT118922375"]
 }
+```
+
+---
+
+## Similar Homes
+
+### Endpoint
+```
+GET /api/listings/similar
+```
+
+Find properties similar to a given listing, ranked by a **weighted composite similarity score** that considers geographic proximity, price, size, bedrooms/bathrooms, year built, and bonus feature matches.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `listing_id` | string | *required* | MLS display ID (e.g., `7522990`) or listing key |
+| `limit` | int | `12` | Number of similar homes to return (1–50) |
+| `radius_miles` | number | `10` | Search radius in miles (1–100). Auto-widens if too few results. |
+| `include_pending` | `"true"` | `false` | Include Pending listings alongside Active |
+| `price_tolerance` | number | `0.5` | Price band tolerance (0.1–1.0). `0.5` = ±50% of subject price. |
+
+### Similarity Scoring Algorithm
+
+Each candidate property receives a composite score (0–1) based on weighted signals:
+
+| Signal | Weight | Scoring |
+|--------|--------|---------|
+| **Geographic proximity** | 30% | 1.0 at 0 miles → 0.0 at radius edge |
+| **Price similarity** | 25% | 1.0 at 0% diff → 0.0 at tolerance% diff |
+| **Size similarity** | 20% | 1.0 at 0% diff → 0.0 at 50% diff |
+| **Bedroom/bath match** | 15% | 1.0 exact match, 0.5 within ±1, 0.0 otherwise |
+| **Year built similarity** | 10% | 1.0 same year → 0.0 at 20+ years apart |
+
+**Bonus modifiers** (additive):
+
+| Bonus | Value | Condition |
+|-------|-------|-----------|
+| Same subdivision | +5% | Both in same subdivision |
+| Matching pool | +2% | Both have pool, or both don't |
+| Matching waterfront | +2% | Both waterfront, or both not |
+
+### Auto-Widening
+
+If fewer than 4 results are found within the initial radius, the search automatically widens:
+- Radius expands by 2.5× (up to 50 miles max)
+- Price tolerance relaxes by 1.5× (up to 100%)
+- The `radius_widened` flag in metadata indicates when this occurred
+
+### Response Format
+
+```json
+{
+  "subject": {
+    "listing_id": "7522990",
+    "listing_key": "ACT218251278",
+    "standard_status": "Active",
+    "list_price": 450000,
+    "bedrooms_total": 3,
+    "bathrooms_total": 2,
+    "living_area": 1800,
+    "lot_size_acres": 0.15,
+    "year_built": 2005,
+    "property_type": "Residential",
+    "property_sub_type": "Single Family Residence",
+    "unparsed_address": "123 Main St",
+    "city": "Austin",
+    "state_or_province": "TX",
+    "postal_code": "78704",
+    "subdivision_name": "Travis Heights",
+    "pool_private": false,
+    "waterfront": false,
+    "_geo": { "lat": 30.2401, "lng": -97.7654 }
+  },
+  "similar": [
+    {
+      "listing_id": "7654321",
+      "similarity_score": 0.847,
+      "distance_miles": 0.42,
+      "score_breakdown": {
+        "geographic": 0.287,
+        "price": 0.231,
+        "size": 0.185,
+        "rooms": 0.15,
+        "age": 0.09,
+        "subdivision_bonus": 0.05,
+        "pool_bonus": 0.02,
+        "waterfront_bonus": 0.02
+      },
+      "standard_status": "Active",
+      "list_price": 465000,
+      "price_per_sqft": 251.35,
+      "price_reduced": false,
+      "bedrooms_total": 3,
+      "bathrooms_total": 2,
+      "living_area": 1850,
+      "lot_size_acres": 0.18,
+      "year_built": 2008,
+      "stories": 2,
+      "garage_spaces": 2,
+      "pool_private": false,
+      "waterfront": false,
+      "new_construction": false,
+      "property_type": "Residential",
+      "property_sub_type": "Single Family Residence",
+      "unparsed_address": "456 Oak Ave",
+      "city": "Austin",
+      "state_or_province": "TX",
+      "postal_code": "78704",
+      "subdivision_name": "Travis Heights",
+      "days_on_market": 14,
+      "_geo": { "lat": 30.2415, "lng": -97.7638 },
+      "photo_count": 22,
+      "photo_urls": [
+        { "order": 0, "url": "https://mls-media.movingtoaustin.com/..." },
+        { "order": 1, "url": "https://mls-media.movingtoaustin.com/..." },
+        { "order": 2, "url": "https://mls-media.movingtoaustin.com/..." }
+      ]
+    }
+  ],
+  "metadata": {
+    "total_candidates": 12,
+    "returned": 12,
+    "radius_miles": 10,
+    "radius_widened": false,
+    "price_tolerance": 0.5,
+    "weights": { "geo": 0.3, "price": 0.25, "size": 0.2, "rooms": 0.15, "age": 0.1 },
+    "bonuses": { "same_subdivision": 0.05, "matching_pool": 0.02, "matching_waterfront": 0.02 }
+  }
+}
+```
+
+### Key Response Fields
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `subject` | object | Summary of the input listing for context |
+| `similar[].similarity_score` | number | Composite score (0–1, higher = more similar) |
+| `similar[].distance_miles` | number | Distance from subject in miles |
+| `similar[].score_breakdown` | object | Individual component scores for transparency |
+| `metadata.radius_widened` | boolean | `true` if search auto-expanded beyond initial radius |
+
+### Example Requests
+
+```bash
+# Basic: find 12 similar homes
+GET /api/listings/similar?listing_id=7522990
+
+# Custom limit and radius
+GET /api/listings/similar?listing_id=7522990&limit=6&radius_miles=5
+
+# Include pending listings, tighter price band
+GET /api/listings/similar?listing_id=7522990&include_pending=true&price_tolerance=0.3
+
+# Wider search for rural properties
+GET /api/listings/similar?listing_id=7522990&radius_miles=25&limit=20
+```
+
+### Error Responses
+
+| Status | Code | When |
+|--------|------|------|
+| 400 | `VALIDATION_ERROR` | Missing `listing_id` or invalid parameters |
+| 404 | `NOT_FOUND` | Listing ID doesn't exist |
+| 422 | `NO_COORDINATES` | Subject listing has no lat/lng (can't compute spatial similarity) |
+
+### Frontend Integration
+
+```typescript
+// On listing detail page, fetch similar homes
+const similar = await fetchAPI(`/api/listings/similar?listing_id=${listingId}&limit=8`);
+
+// Render carousel/grid of similar homes
+similar.similar.map(home => (
+  <SimilarHomeCard
+    key={home.listing_id}
+    price={home.list_price}
+    beds={home.bedrooms_total}
+    baths={home.bathrooms_total}
+    sqft={home.living_area}
+    address={home.unparsed_address}
+    city={home.city}
+    photo={home.photo_urls[0]?.url}
+    distance={home.distance_miles}
+    score={home.similarity_score}
+  />
+));
 ```
 
 ---
