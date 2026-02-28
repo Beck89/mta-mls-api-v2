@@ -362,12 +362,31 @@ export async function detailRoutes(app: FastifyInstance) {
     }
 
     try {
+      // ─── Resolve listing_id_display → listing_key for each ID ───────────
+      // IDs may be listing_id_display values (public-facing) or listing_key
+      // values (internal). Bulk-resolve display IDs first, then fall back to
+      // treating unresolved ones as listing_key directly.
+      const resolved = await sql`
+        SELECT listing_id_display, listing_key FROM properties
+        WHERE listing_id_display = ANY(${ids})
+          AND mlg_can_view = true
+          AND 'IDX' = ANY(mlg_can_use)
+      `;
+
+      const displayToKey = new Map<string, string>();
+      for (const r of resolved) {
+        displayToKey.set(r.listing_id_display, r.listing_key);
+      }
+
+      // Map each input ID to a listing_key (resolved display ID or fallback)
+      const resolvedKeys = ids.map(id => displayToKey.get(id) ?? id);
+
       const listings: any[] = [];
       const found: string[] = [];
       const notFound: string[] = [];
 
       // Fetch all in parallel
-      const results = await Promise.all(ids.map(id => fetchPropertyDetail(id)));
+      const results = await Promise.all(resolvedKeys.map(key => fetchPropertyDetail(key)));
 
       for (let i = 0; i < ids.length; i++) {
         if (results[i]) {
