@@ -88,6 +88,10 @@ const searchQuerySchema = z.object({
   ]).optional(),
   open_house: z.enum(['this_weekend', 'next_weekend', 'all']).optional(),
 
+  // History-derived filters
+  back_on_market: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  multiple_price_reductions: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+
   // Text search
   keywords: z.string().optional(),
 
@@ -347,6 +351,30 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
     );
   }
 
+  // Back on market — listing went Pending/Active Under Contract → Active
+  if (params.back_on_market === true) {
+    filters.push(
+      sql`EXISTS (
+        SELECT 1 FROM status_history sh
+        WHERE sh.listing_key = p.listing_key
+          AND sh.new_status = 'Active'
+          AND sh.old_status IN ('Pending', 'Active Under Contract')
+      )`
+    );
+  }
+
+  // Multiple price reductions — listing has been reduced more than once
+  if (params.multiple_price_reductions === true) {
+    filters.push(
+      sql`(
+        SELECT COUNT(*) FROM price_history ph
+        WHERE ph.listing_key = p.listing_key
+          AND ph.old_price IS NOT NULL
+          AND ph.new_price < ph.old_price
+      ) > 1`
+    );
+  }
+
   return filters;
 }
 
@@ -414,6 +442,8 @@ function formatSearchResult(row: any) {
     price_per_sqft: livingArea > 0 ? Math.round((listPrice / livingArea) * 100) / 100 : null,
     price_reduced: listPrice < originalPrice && originalPrice > 0,
     price_reduction_amount: originalPrice > listPrice ? Math.round(originalPrice - listPrice) : null,
+    price_reduction_count: row.price_reduction_count || 0,
+    back_on_market: row.back_on_market || false,
     bedrooms_total: parseFloat(row.bedrooms_total) || null,
     bathrooms_total: parseFloat(row.bathrooms_total) || null,
     living_area: livingArea || null,
@@ -511,6 +541,17 @@ const SELECT_FIELDS = sql`
   p.longitude,
   p.photos_count,
   p.original_entry_ts,
+  (SELECT COUNT(*)::int FROM price_history ph
+   WHERE ph.listing_key = p.listing_key
+     AND ph.old_price IS NOT NULL
+     AND ph.new_price < ph.old_price
+  ) AS price_reduction_count,
+  EXISTS (
+    SELECT 1 FROM status_history sh
+    WHERE sh.listing_key = p.listing_key
+      AND sh.new_status = 'Active'
+      AND sh.old_status IN ('Pending', 'Active Under Contract')
+  ) AS back_on_market,
   (SELECT COALESCE(json_agg(sub ORDER BY sub.media_order ASC NULLS LAST), '[]'::json)
    FROM (SELECT media_order, public_url
          FROM media

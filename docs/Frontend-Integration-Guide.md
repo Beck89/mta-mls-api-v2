@@ -166,6 +166,13 @@ GET /api/listings/search
 | `price_reduction` | enum | `any`, `last_day`, `last_3_days`, `last_7_days`, `last_14_days`, `last_30_days`, `over_1_month`, `over_2_months`, `over_3_months` |
 | `open_house` | enum | `this_weekend`, `next_weekend`, `all` |
 
+#### History-Derived Filters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `back_on_market` | `"true"` | Listings that went Pending/Active Under Contract → Active (deal fell through) |
+| `multiple_price_reductions` | `"true"` | Listings with more than one price reduction (motivated sellers) |
+
 #### Text Search
 
 | Parameter | Type | Description |
@@ -312,6 +319,8 @@ When `include_map_pins=true` is passed, the response includes an additional `map
 | `price_per_sqft` | number \| null | Calculated server-side |
 | `price_reduced` | boolean | `true` if current < original price |
 | `price_reduction_amount` | number \| null | Dollar amount of reduction |
+| `price_reduction_count` | number | Number of times price was reduced |
+| `back_on_market` | boolean | `true` if listing went Pending/AUC → Active |
 | `bathrooms_total` | number | Pre-calculated (full + half, e.g., 2.5) |
 | `days_on_market` | number \| null | Calculated from `original_entry_ts` |
 | `_geo` | object \| null | `{ lat, lng }` for mapping libraries |
@@ -379,7 +388,7 @@ Returns a comprehensive `listing` object with nested sections:
 {
   "listing": {
     "ids": { "listing_key", "listing_id", "listing_id_display", "mls" },
-    "status": { "standard_status", "mls_status", "listing_date", "days_on_market", "last_modified" },
+    "status": { "standard_status", "mls_status", "listing_date", "days_on_market", "last_modified", "back_on_market", "back_on_market_date" },
     "pricing": { "current_price", "original_price", "previous_price", "price_reduction", "price_reduction_percentage", "price_per_sqft", "last_price_change" },
     "property_details": { "type", "category", "condition", "year_built", "architectural_style" },
     "location": { "address", "street_number", "street_name", "street_suffix", "city", "state", "zip", "county", "country", "subdivision", "mls_area", "coordinates": { "latitude", "longitude" } },
@@ -398,7 +407,11 @@ Returns a comprehensive `listing` object with nested sections:
     "media": { "photo_count", "photos_last_updated", "virtual_tour", "photos": [{ "order", "url", "content_type" }] },
     "syndication": { "display_online", "allow_avm", "syndicated_to" },
     "open_houses": [{ "date", "start_time", "end_time", "remarks" }],
-    "price_history": [{ "old_price", "new_price", "change_type", "timestamp" }],
+    "price_history": {
+      "summary": { "total_changes", "net_change_from_first", "net_change_percentage", "avg_days_between_changes" },
+      "entries": [{ "old_price", "new_price", "change_amount", "change_percentage", "change_type", "days_at_previous_price", "timestamp" }]
+    },
+    "status_history": [{ "old_status", "new_status", "days_in_status", "timestamp" }],
     "calculated_metrics": { "price_per_sqft", "price_per_acre", "days_on_market" },
     "local_fields": { ... }
   }
@@ -754,6 +767,8 @@ interface ListingCard {
   photo_urls: { order: number; url: string }[];
   price_reduced: boolean;
   price_reduction_amount: number | null;
+  price_reduction_count: number;
+  back_on_market: boolean;
   next_open_house: { date: string; start_time: string; end_time: string } | null;
   _geo: { lat: number; lng: number } | null;
 }

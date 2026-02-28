@@ -28,9 +28,125 @@ const batchQuerySchema = z.object({
   ids: z.string().min(1),
 });
 
+// ─── Helper: compute "back on market" from status history ────────────────────
+
+function deriveBackOnMarket(statusHistoryRows: any[]): { back_on_market: boolean; back_on_market_date: string | null } {
+  // Status history is ordered DESC (newest first). Look for any transition
+  // FROM a contract status (Pending, Active Under Contract) TO Active.
+  const contractStatuses = ['Pending', 'Active Under Contract'];
+  for (const sh of statusHistoryRows) {
+    if (
+      sh.new_status === 'Active' &&
+      contractStatuses.includes(sh.old_status)
+    ) {
+      return { back_on_market: true, back_on_market_date: sh.modification_ts };
+    }
+  }
+  return { back_on_market: false, back_on_market_date: null };
+}
+
+// ─── Helper: enrich price history with calculated fields ─────────────────────
+
+function enrichPriceHistory(priceHistoryRows: any[]) {
+  // Rows are ordered DESC (newest first). We process them to add:
+  // - change_amount, change_percentage per entry
+  // - days_at_previous_price (time between consecutive changes)
+  // - summary stats
+
+  const enriched = priceHistoryRows.map((ph, i) => {
+    const oldPrice = parseFloat(ph.old_price) || null;
+    const newPrice = parseFloat(ph.new_price) || null;
+    const changeAmount = oldPrice !== null && newPrice !== null ? newPrice - oldPrice : null;
+    const changePct = oldPrice && changeAmount !== null
+      ? Math.round((changeAmount / oldPrice) * 10000) / 100
+      : null;
+
+    // days_at_previous_price: time between this change and the next (older) one
+    let daysAtPreviousPrice: number | null = null;
+    if (i < priceHistoryRows.length - 1) {
+      const thisDate = new Date(ph.modification_ts);
+      const olderDate = new Date(priceHistoryRows[i + 1].modification_ts);
+      const diffMs = thisDate.getTime() - olderDate.getTime();
+      daysAtPreviousPrice = Math.max(0, Math.round(diffMs / (1000 * 60 * 60 * 24)));
+    }
+
+    return {
+      old_price: oldPrice,
+      new_price: newPrice,
+      change_amount: changeAmount,
+      change_percentage: changePct,
+      change_type: ph.change_type,
+      days_at_previous_price: daysAtPreviousPrice,
+      timestamp: ph.modification_ts,
+    };
+  });
+
+  // Summary stats
+  const totalChanges = enriched.length;
+  const firstPrice = totalChanges > 0 ? (enriched[enriched.length - 1].new_price ?? enriched[enriched.length - 1].old_price) : null;
+  const latestPrice = totalChanges > 0 ? enriched[0].new_price : null;
+  const totalReductionFromOriginal = firstPrice && latestPrice ? latestPrice - firstPrice : null;
+  const totalReductionPct = firstPrice && totalReductionFromOriginal !== null && firstPrice > 0
+    ? Math.round((totalReductionFromOriginal / firstPrice) * 10000) / 100
+    : null;
+
+  // Average days between changes
+  const daysValues = enriched
+    .map(e => e.days_at_previous_price)
+    .filter((d): d is number => d !== null);
+  const avgDaysBetweenChanges = daysValues.length > 0
+    ? Math.round(daysValues.reduce((a, b) => a + b, 0) / daysValues.length)
+    : null;
+
+  return {
+    summary: {
+      total_changes: totalChanges,
+      net_change_from_first: totalReductionFromOriginal,
+      net_change_percentage: totalReductionPct,
+      avg_days_between_changes: avgDaysBetweenChanges,
+    },
+    entries: enriched,
+  };
+}
+
+// ─── Helper: enrich status history with days_in_status ───────────────────────
+
+function enrichStatusHistory(statusHistoryRows: any[]) {
+  // Rows are ordered DESC (newest first). Calculate days_in_status as the
+  // time between consecutive status changes.
+  return statusHistoryRows.map((sh, i) => {
+    let daysInStatus: number | null = null;
+    if (i === 0) {
+      // Most recent status — days from this change to now
+      const changeDate = new Date(sh.modification_ts);
+      const now = new Date();
+      daysInStatus = Math.max(0, Math.round((now.getTime() - changeDate.getTime()) / (1000 * 60 * 60 * 24)));
+    } else {
+      // Older statuses — days from this change to the next (newer) one
+      const thisDate = new Date(sh.modification_ts);
+      const newerDate = new Date(statusHistoryRows[i - 1].modification_ts);
+      daysInStatus = Math.max(0, Math.round((newerDate.getTime() - thisDate.getTime()) / (1000 * 60 * 60 * 24)));
+    }
+
+    return {
+      old_status: sh.old_status,
+      new_status: sh.new_status,
+      days_in_status: daysInStatus,
+      timestamp: sh.modification_ts,
+    };
+  });
+}
+
 // ─── Format a property row into the V2 detail structure ─────────────────────
 
-function formatPropertyDetail(row: any, mediaRows: any[], roomRows: any[], openHouseRows: any[], priceHistoryRows: any[]) {
+function formatPropertyDetail(
+  row: any,
+  mediaRows: any[],
+  roomRows: any[],
+  openHouseRows: any[],
+  priceHistoryRows: any[],
+  statusHistoryRows: any[],
+) {
   const listPrice = parseFloat(row.list_price) || 0;
   const originalPrice = parseFloat(row.original_list_price) || 0;
   const livingArea = parseFloat(row.living_area) || 0;
@@ -46,6 +162,15 @@ function formatPropertyDetail(row: any, mediaRows: any[], roomRows: any[], openH
     : null;
 
   const daysOnMarket = calcDaysOnMarket(row.original_entry_ts);
+
+  // Derive back-on-market flag from status history
+  const backOnMarket = deriveBackOnMarket(statusHistoryRows);
+
+  // Enrich price history with calculated fields
+  const enrichedPriceHistory = enrichPriceHistory(priceHistoryRows);
+
+  // Enrich status history with days_in_status
+  const enrichedStatusHistory = enrichStatusHistory(statusHistoryRows);
 
   // Parse local fields for MLS-specific data
   const local = row.local_fields || {};
@@ -63,6 +188,8 @@ function formatPropertyDetail(row: any, mediaRows: any[], roomRows: any[], openH
       listing_date: row.listing_contract_date,
       days_on_market: daysOnMarket,
       last_modified: row.modification_ts,
+      back_on_market: backOnMarket.back_on_market,
+      back_on_market_date: backOnMarket.back_on_market_date,
     },
     pricing: {
       current_price: listPrice,
@@ -202,12 +329,8 @@ function formatPropertyDetail(row: any, mediaRows: any[], roomRows: any[], openH
       end_time: oh.open_house_end,
       remarks: oh.open_house_remarks,
     })),
-    price_history: priceHistoryRows.map(ph => ({
-      old_price: parseFloat(ph.old_price) || null,
-      new_price: parseFloat(ph.new_price) || null,
-      change_type: ph.change_type,
-      timestamp: ph.modification_ts,
-    })),
+    price_history: enrichedPriceHistory,
+    status_history: enrichedStatusHistory,
     calculated_metrics: {
       price_per_sqft: pricePerSqft,
       price_per_acre: pricePerAcre,
@@ -220,25 +343,25 @@ function formatPropertyDetail(row: any, mediaRows: any[], roomRows: any[], openH
 // ─── Fetch full detail for a single property ────────────────────────────────
 
 async function fetchPropertyDetail(listingKey: string) {
-  const [propertyRows, mediaRows, roomRows, openHouseRows, priceHistoryRows] = await Promise.all([
+  const [propertyRows, mediaRows, roomRows, openHouseRows, priceHistoryRows, statusHistoryRows] = await Promise.all([
     sql`
-      SELECT * FROM properties 
-      WHERE listing_key = ${listingKey} 
-        AND mlg_can_view = true 
+      SELECT * FROM properties
+      WHERE listing_key = ${listingKey}
+        AND mlg_can_view = true
         AND 'IDX' = ANY(mlg_can_use)
       LIMIT 1
     `,
     sql`
       SELECT media_key, public_url, media_order, content_type
-      FROM media 
-      WHERE listing_key = ${listingKey} 
-        AND status = 'complete' 
+      FROM media
+      WHERE listing_key = ${listingKey}
+        AND status = 'complete'
         AND public_url IS NOT NULL
       ORDER BY media_order ASC NULLS LAST
     `,
     sql`
       SELECT room_type, room_dimensions, room_features
-      FROM rooms 
+      FROM rooms
       WHERE listing_key = ${listingKey}
     `,
     sql`
@@ -255,11 +378,17 @@ async function fetchPropertyDetail(listingKey: string) {
       WHERE listing_key = ${listingKey}
       ORDER BY modification_ts DESC
     `,
+    sql`
+      SELECT old_status, new_status, modification_ts
+      FROM status_history
+      WHERE listing_key = ${listingKey}
+      ORDER BY modification_ts DESC
+    `,
   ]);
 
   if (propertyRows.length === 0) return null;
 
-  return formatPropertyDetail(propertyRows[0], mediaRows, roomRows, openHouseRows, priceHistoryRows);
+  return formatPropertyDetail(propertyRows[0], mediaRows, roomRows, openHouseRows, priceHistoryRows, statusHistoryRows);
 }
 
 // ─── Route Handlers ─────────────────────────────────────────────────────────
