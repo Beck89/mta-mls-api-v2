@@ -16,6 +16,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { sql } from '../db/index.js';
 import { env } from '../config/env.js';
+import { calcDaysOnMarket } from '../utils/dates.js';
 
 // ─── Validation Schema ──────────────────────────────────────────────────────
 
@@ -313,9 +314,9 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
   if (params.fireplace === true) filters.push(sql`p.fireplaces_total > 0`);
   if (params.new_construction === true) filters.push(sql`p.new_construction_yn = true`);
 
-  // Days on market
+  // Days on market — compare against Chicago calendar date to avoid UTC boundary issues
   if (params.days_on_market !== undefined) {
-    filters.push(sql`p.original_entry_ts >= NOW() - make_interval(days => ${params.days_on_market})`);
+    filters.push(sql`(CURRENT_TIMESTAMP AT TIME ZONE 'America/Chicago')::date - (p.original_entry_ts AT TIME ZONE 'America/Chicago')::date <= ${params.days_on_market}`);
   }
 
   // Price reduction
@@ -418,9 +419,7 @@ function formatSearchResult(row: any) {
     living_area: livingArea || null,
     year_built: row.year_built,
     lot_size_acres: parseFloat(row.lot_size_acres) || null,
-    days_on_market: row.original_entry_ts
-      ? Math.floor((Date.now() - new Date(row.original_entry_ts).getTime()) / (1000 * 60 * 60 * 24))
-      : null,
+    days_on_market: calcDaysOnMarket(row.original_entry_ts),
     pool_private: row.pool_private_yn || false,
     garage_spaces: parseFloat(row.garage_spaces) || 0,
     new_construction: row.new_construction_yn || false,

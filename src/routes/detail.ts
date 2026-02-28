@@ -10,6 +10,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { sql } from '../db/index.js';
 import { env } from '../config/env.js';
+import { calcDaysOnMarket } from '../utils/dates.js';
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
@@ -44,9 +45,7 @@ function formatPropertyDetail(row: any, mediaRows: any[], roomRows: any[], openH
     ? Math.round((priceReduction / originalPrice) * 10000) / 100
     : null;
 
-  const daysOnMarket = row.original_entry_ts
-    ? Math.floor((Date.now() - new Date(row.original_entry_ts).getTime()) / (1000 * 60 * 60 * 24))
-    : null;
+  const daysOnMarket = calcDaysOnMarket(row.original_entry_ts);
 
   // Parse local fields for MLS-specific data
   const local = row.local_fields || {};
