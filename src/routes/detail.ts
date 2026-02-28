@@ -387,4 +387,53 @@ export async function detailRoutes(app: FastifyInstance) {
       });
     }
   });
+
+  // ─── Resolve listing_key → listing_id_display ───────────────────────────────
+  // Lightweight endpoint for converting internal keys to display IDs.
+  // Supports single key or comma-separated batch (up to 100).
+  //
+  // GET /api/listings/resolve?keys=abc123
+  // GET /api/listings/resolve?keys=abc123,def456,ghi789
+  app.get('/resolve', async (request, reply) => {
+    const { keys } = request.query as { keys?: string };
+
+    if (!keys) {
+      return reply.status(400).send({
+        error: 'Query parameter "keys" is required (comma-separated listing_key values)',
+      });
+    }
+
+    const keyList = keys.split(',').map(k => k.trim()).filter(Boolean);
+
+    if (keyList.length === 0) {
+      return reply.status(400).send({ error: 'No valid listing keys provided.' });
+    }
+
+    if (keyList.length > 100) {
+      return reply.status(400).send({ error: 'Batch size exceeds maximum of 100 keys.' });
+    }
+
+    try {
+      const results = await sql`
+        SELECT listing_key, listing_id_display
+        FROM properties
+        WHERE listing_key = ANY(${keyList})
+          AND mlg_can_view = true
+      `;
+
+      const resolved: Record<string, string | null> = {};
+      for (const key of keyList) {
+        const match = results.find((r: any) => r.listing_key === key);
+        resolved[key] = match?.listing_id_display ?? null;
+      }
+
+      return { resolved };
+    } catch (err: any) {
+      request.log.error(err, 'Resolve error');
+      return reply.status(500).send({
+        error: 'An error occurred while resolving listing keys',
+        details: env.NODE_ENV === 'development' ? err.message : undefined,
+      });
+    }
+  });
 }
