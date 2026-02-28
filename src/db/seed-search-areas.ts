@@ -6,7 +6,7 @@
  * 
  * The GeoJSON file must have features with properties:
  *   - name: string
- *   - search_type: 'city' | 'county' | 'zipcode' | 'neighborhood'
+ *   - search_type: 'city' | 'county' | 'zipcode' | 'neighborhood' | 'school_district'
  *   - area_sq_miles: number (optional)
  *   - source: string (optional)
  */
@@ -18,7 +18,7 @@ import { env } from '../config/env.js';
 
 const sql = postgres(env.DATABASE_URL, { max: 1 });
 
-const VALID_TYPES = ['city', 'county', 'zipcode', 'neighborhood'] as const;
+const VALID_TYPES = ['city', 'county', 'zipcode', 'neighborhood', 'school_district'] as const;
 type AreaType = typeof VALID_TYPES[number];
 
 function slugify(name: string): string {

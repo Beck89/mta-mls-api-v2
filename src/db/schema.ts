@@ -355,7 +355,7 @@ export const searchAreas = pgTable('search_areas', {
   id: serial('id').primaryKey(),
   name: varchar('name').notNull(),
   slug: varchar('slug').notNull(),
-  type: varchar('type').notNull().default('neighborhood'), // 'city' | 'county' | 'zipcode' | 'neighborhood'
+  type: varchar('type').notNull().default('neighborhood'), // 'city' | 'county' | 'zipcode' | 'neighborhood' | 'school_district'
   source: varchar('source'),
   sqMiles: numeric('sq_miles'),
   geom: geometryMultiPolygon('geom'),
@@ -377,7 +377,7 @@ export const searchSuggestions = pgTable('search_suggestions', {
   id: serial('id').primaryKey(),
   label: varchar('label').notNull(),           // Display text shown in the dropdown
   matchText: varchar('match_text'),             // Text used for trigram matching (street address only for addresses)
-  type: varchar('type').notNull(), // 'address' | 'city' | 'zip' | 'county' | 'subdivision' | 'neighborhood'
+  type: varchar('type').notNull(), // 'address' | 'city' | 'zip' | 'county' | 'subdivision' | 'neighborhood' | 'school_district'
   searchValue: varchar('search_value'),
   searchParam: varchar('search_param'), // query param name: 'city' | 'zip_code' | 'county' | 'neighborhood' | 'keywords'
   hasPolygon: boolean('has_polygon').default(false), // true = polygon-backed (can fetch GeoJSON boundary)

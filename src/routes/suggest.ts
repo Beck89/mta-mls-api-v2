@@ -67,8 +67,8 @@ const RESERVED_PER_TYPE = 3;
 
 const suggestQuerySchema = z.object({
   q: z.string().min(1),
-  limit: z.coerce.number().int().min(1).max(50).default(20),
-  types: z.string().optional(), // comma-separated: 'city,zip,subdivision,neighborhood,address'
+  limit: z.coerce.number().int().min(1).max(50).default(30),
+  types: z.string().optional(), // comma-separated: 'city,zip,subdivision,neighborhood,address,school_district,county'
 });
 
 export async function suggestRoutes(app: FastifyInstance) {

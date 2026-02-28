@@ -46,6 +46,9 @@ const searchQuerySchema = z.object({
   zip_code: z.string().optional(),
   county: z.string().optional(),
 
+  // School district filter — polygon-backed spatial filter (ST_Within)
+  school_district: z.string().optional(),
+
   // Property characteristics
   property_type: z.string().optional(),
   property_sub_type: z.string().optional(),
@@ -233,6 +236,16 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
       sql`ST_Within(p.geog::geometry, (
         SELECT ST_Union(geom) FROM search_areas
         WHERE type = 'county' AND slug = ANY(${slugs})
+      ))`
+    );
+  }
+
+  if (params.school_district) {
+    const slugs = params.school_district.split(',').map(s => s.trim()).filter(Boolean);
+    areaConditions.push(
+      sql`ST_Within(p.geog::geometry, (
+        SELECT ST_Union(geom) FROM search_areas
+        WHERE type = 'school_district' AND slug = ANY(${slugs})
       ))`
     );
   }

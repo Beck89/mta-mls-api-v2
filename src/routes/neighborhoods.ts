@@ -8,13 +8,13 @@
  * GET /api/neighborhoods            - List neighborhoods (type=neighborhood)
  * GET /api/neighborhoods/:slug      - Get single neighborhood with GeoJSON polygon
  * 
- * Supported types: city | county | zipcode | neighborhood
+ * Supported types: city | county | zipcode | neighborhood | school_district
  */
 
 import { FastifyInstance } from 'fastify';
 import { sql } from '../db/index.js';
 
-const VALID_TYPES = ['city', 'county', 'zipcode', 'neighborhood'] as const;
+const VALID_TYPES = ['city', 'county', 'zipcode', 'neighborhood', 'school_district'] as const;
 type AreaType = typeof VALID_TYPES[number];
 
 function isValidType(t: string): t is AreaType {

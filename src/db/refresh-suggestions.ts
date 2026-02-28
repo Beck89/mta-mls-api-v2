@@ -266,6 +266,33 @@ export async function refreshSuggestions(client?: ReturnType<typeof postgres>) {
   const addrCount = await db`SELECT COUNT(*) as cnt FROM search_suggestions WHERE type = 'address'`;
   console.log(`  ✓ ${addrCount[0].cnt} addresses`);
 
+  // ─── School Districts (polygon-backed) ─────────────────────────────────
+  // Priority 8 — same as ZIP codes. From search_areas WHERE type = 'school_district'.
+  // has_polygon = true, search_param = 'school_district'
+  // Uses Census TIGER/Line polygon boundaries for accurate spatial filtering.
+  await db`
+    INSERT INTO search_suggestions (label, match_text, type, search_value, search_param, has_polygon, latitude, longitude, listing_count, priority)
+    SELECT
+      name AS label,
+      name AS match_text,
+      'school_district' AS type,
+      slug AS search_value,
+      'school_district' AS search_param,
+      true AS has_polygon,
+      centroid_lat::numeric AS latitude,
+      centroid_lng::numeric AS longitude,
+      listing_count,
+      8 AS priority
+    FROM search_areas
+    WHERE type = 'school_district'
+      AND listing_count > 0
+      AND name IS NOT NULL
+      AND name != ''
+    ORDER BY listing_count DESC
+  `;
+  const schoolDistrictCount = await db`SELECT COUNT(*) as cnt FROM search_suggestions WHERE type = 'school_district'`;
+  console.log(`  ✓ ${schoolDistrictCount[0].cnt} school districts (polygon-backed)`);
+
   const totalCount = await db`SELECT COUNT(*) as cnt FROM search_suggestions`;
   console.log(`\n✅ Total suggestions: ${totalCount[0].cnt}`);
 
