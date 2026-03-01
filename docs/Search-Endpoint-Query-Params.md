@@ -121,10 +121,13 @@ Values for these parameters are **slugs** obtained from the `/api/suggest` typea
 | `fireplace` | boolean | `true`, `false` | When `true`, only returns listings with at least one fireplace (`fireplaces_total > 0`). |
 | `new_construction` | boolean | `true`, `false` | When `true`, only returns new construction listings (`new_construction_yn = true`). |
 | `garage` | boolean | `true`, `false` | When `true`, only returns listings with at least one garage space (`garage_spaces > 0`). |
+| `view` | boolean | `true`, `false` | When `true`, only returns listings with a meaningful view (has a non-empty `view` array that is not just `["None"]`). |
+| `virtual_tour` | boolean | `true`, `false` | When `true`, only returns listings that have a virtual tour URL. |
 | `min_garage_spaces` | integer | ≥ 0 | Minimum number of garage spaces. |
 | `max_garage_spaces` | integer | ≥ 0 | Maximum number of garage spaces. |
 | `min_parking_spaces` | integer | ≥ 0 | Minimum total parking spaces (includes garage + other). |
 | `max_parking_spaces` | integer | ≥ 0 | Maximum total parking spaces. |
+| `max_hoa_fee` | integer | ≥ 0 | Maximum monthly HOA fee in USD. The fee is normalized to a monthly amount regardless of the frequency stored in the MLS (e.g., an annual fee of $1,200 is treated as $100/month). Listings with no HOA fee or a normalized monthly fee at or below this value are returned. |
 
 > **Note:** Boolean parameters must be passed as the string `"true"` or `"false"` (not `1`/`0`).
 

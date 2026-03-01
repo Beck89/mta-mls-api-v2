@@ -78,6 +78,9 @@ const searchQuerySchema = z.object({
   waterfront: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
   fireplace: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
   new_construction: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  view: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  virtual_tour: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  max_hoa_fee: z.coerce.number().int().min(0).optional(),
 
   // Status & timing
   status: z.string().optional(),
@@ -330,6 +333,33 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
   if (params.waterfront === true) filters.push(sql`p.waterfront_yn = true`);
   if (params.fireplace === true) filters.push(sql`p.fireplaces_total > 0`);
   if (params.new_construction === true) filters.push(sql`p.new_construction_yn = true`);
+
+  // View — has a meaningful view (excludes "None"-only arrays)
+  if (params.view === true) {
+    filters.push(sql`p.view IS NOT NULL AND array_length(p.view, 1) > 0 AND NOT (p.view = ARRAY['None'])`);
+  }
+
+  // Virtual tour — has a virtual tour URL
+  if (params.virtual_tour === true) {
+    filters.push(sql`p.virtual_tour_url IS NOT NULL AND p.virtual_tour_url != ''`);
+  }
+
+  // Max HOA fee — normalize association_fee to monthly amount and compare.
+  // Listings with no HOA (NULL fee) are always included (they have $0 cost).
+  if (params.max_hoa_fee !== undefined) {
+    filters.push(sql`(
+      p.association_fee IS NULL
+      OR (
+        CASE LOWER(p.association_fee_frequency)
+          WHEN 'monthly'       THEN p.association_fee
+          WHEN 'quarterly'     THEN p.association_fee / 3
+          WHEN 'semi-annually' THEN p.association_fee / 6
+          WHEN 'annually'      THEN p.association_fee / 12
+          ELSE p.association_fee
+        END
+      ) <= ${params.max_hoa_fee}
+    )`);
+  }
 
   // Days on market — compare against Chicago calendar date to avoid UTC boundary issues
   if (params.days_on_market !== undefined) {
