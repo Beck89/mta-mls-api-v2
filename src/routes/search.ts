@@ -152,6 +152,19 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
   const filters: SqlFragment[] = [
     sql`p.mlg_can_view = true`,
     sql`'IDX' = ANY(p.mlg_can_use)`,
+    // Don't return listings until the primary (first) photo has been downloaded.
+    // Checks that the media row with the lowest media_order is complete, so the
+    // hero image is always available — no listing appears without a photo.
+    sql`EXISTS (
+      SELECT 1 FROM media m
+      WHERE m.listing_key = p.listing_key
+        AND m.status = 'complete'
+        AND m.public_url IS NOT NULL
+        AND m.media_order = (
+          SELECT MIN(m2.media_order) FROM media m2
+          WHERE m2.listing_key = p.listing_key
+        )
+    )`,
   ];
 
   // Status
