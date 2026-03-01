@@ -63,6 +63,13 @@ export function clearSuggestCache(): void {
 // types (cities, neighborhoods) aren't buried by a flood of subdivisions/addresses.
 const RESERVED_PER_TYPE = 3;
 
+// ─── Address-like query detection ────────────────────────────────────────────
+// Queries starting with a number + space (e.g. "210 Lavaca", "1500 S Congress")
+// are almost certainly address searches. For these queries we suppress area-type
+// results (cities, counties, subdivisions, etc.) that only matched via fuzzy
+// trigram similarity — they must have an exact prefix or word-boundary match.
+const ADDRESS_LIKE_RE = /^\d+\s/;
+
 // ─── Route ───────────────────────────────────────────────────────────────────
 
 const suggestQuerySchema = z.object({
@@ -99,6 +106,10 @@ export async function suggestRoutes(app: FastifyInstance) {
       // Numeric queries (ZIP codes like "78749") should use prefix-only matching,
       // not trigram fuzzy matching — otherwise "78749" also returns "78748", "78746", etc.
       const isNumericQuery = /^\d+$/.test(q);
+
+      // Address-like queries ("210 Lavaca", "1500 S Congress") — suppress fuzzy
+      // area-type matches so cities/counties/subdivisions don't pollute results.
+      const isAddressQuery = ADDRESS_LIKE_RE.test(q);
 
       if (q.length < 3 || isNumericQuery) {
         // ─── Short query or ZIP code: prefix match with per-type diversity ─
@@ -146,6 +157,12 @@ export async function suggestRoutes(app: FastifyInstance) {
         //   Branch 2: trigram similarity via % and <%> operators
         //   Branch 3: word-boundary prefix match (ILIKE '% query%')
         // Then ROW_NUMBER() OVER (PARTITION BY type) ensures diversity.
+        //
+        // Address-like queries ("210 Lavaca"): Branch 2 is restricted to
+        // address type only — area types (city, county, subdivision, etc.)
+        // must match via prefix (Branch 1) or word-boundary (Branch 3).
+        // Slot reservation is also conditional: types with only fuzzy matches
+        // don't get reserved slots when the query looks like an address.
         results = await sql`
           WITH matches AS (
             -- Branch 1: Exact prefix matches (fastest, most relevant)
@@ -161,6 +178,8 @@ export async function suggestRoutes(app: FastifyInstance) {
             UNION ALL
 
             -- Branch 2: Trigram similarity (GIN index-accelerated via % operator)
+            -- When query is address-like, restrict to address type only so that
+            -- fuzzy matches on "Lavaca" don't pull in "Port Lavaca" city, etc.
             SELECT
               id, label, type, search_value, search_param,
               has_polygon, latitude, longitude, listing_count, priority,
@@ -175,6 +194,7 @@ export async function suggestRoutes(app: FastifyInstance) {
               OR ${q} <% COALESCE(match_text, label)
             )
               AND NOT (COALESCE(match_text, label) ILIKE ${q + '%'})
+              ${isAddressQuery ? sql`AND type NOT IN ('city', 'county', 'zip', 'subdivision', 'neighborhood', 'school_district')` : sql``}
               ${typeList && typeList.length > 0 ? sql`AND type = ANY(${typeList})` : sql``}
 
             UNION ALL
@@ -197,22 +217,33 @@ export async function suggestRoutes(app: FastifyInstance) {
             FROM matches
             ORDER BY id, rank_group, score DESC
           ),
-          ranked AS (
-            SELECT *,
-              ROW_NUMBER() OVER (
-                PARTITION BY type
-                ORDER BY rank_group, score DESC, listing_count DESC NULLS LAST
-              ) as type_rank
+          -- Track whether each type has at least one prefix/word-boundary match
+          -- (rank_group 0 or 2). Types with only fuzzy matches (rank_group 1)
+          -- should not get reserved slots when the query is address-like.
+          type_has_prefix AS (
+            SELECT DISTINCT type
             FROM deduped
+            WHERE rank_group IN (0, 2)
+          ),
+          ranked AS (
+            SELECT d.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY d.type
+                ORDER BY d.rank_group, d.score DESC, d.listing_count DESC NULLS LAST
+              ) as type_rank,
+              (tp.type IS NOT NULL) as has_prefix_match
+            FROM deduped d
+            LEFT JOIN type_has_prefix tp ON tp.type = d.type
           )
-          -- Reserved slots first (top N per type), then fill remaining by overall relevance
+          -- Reserved slots only for types that earned them (have a prefix match).
+          -- Types with only fuzzy matches compete purely on score.
           SELECT
             id, label, type, search_value, search_param,
             has_polygon, latitude, longitude, listing_count, priority,
             score, rank_group, type_rank
           FROM ranked
           ORDER BY
-            CASE WHEN type_rank <= ${RESERVED_PER_TYPE} THEN 0 ELSE 1 END,
+            CASE WHEN type_rank <= ${RESERVED_PER_TYPE} AND has_prefix_match THEN 0 ELSE 1 END,
             rank_group,
             score DESC,
             priority DESC,
