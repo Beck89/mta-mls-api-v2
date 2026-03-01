@@ -105,7 +105,7 @@ export async function suggestRoutes(app: FastifyInstance) {
         results = await sql`
           WITH raw_matches AS (
             SELECT
-              id, label, type, search_value, search_param,
+              id, label, match_text, type, search_value, search_param,
               has_polygon, latitude, longitude, listing_count, priority,
               1.0 as score
             FROM search_suggestions
