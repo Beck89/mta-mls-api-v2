@@ -90,6 +90,14 @@ export const properties = pgTable('properties', {
   horseYn: boolean('horse_yn'),
   associationYn: boolean('association_yn'),
 
+  // Association/HOA details
+  associationFee: numeric('association_fee'),
+  associationFeeFrequency: varchar('association_fee_frequency'),
+  associationName: varchar('association_name'),
+  associationFeeIncludes: text('association_fee_includes').array(),
+  associationFee2: numeric('association_fee2'),
+  associationFee2Frequency: varchar('association_fee2_frequency'),
+
   // Geography
   geog: geography('geog'),
   latitude: numeric('latitude'),
@@ -141,6 +149,7 @@ export const properties = pgTable('properties', {
   // Tax
   taxAssessedValue: numeric('tax_assessed_value'),
   taxYear: integer('tax_year'),
+  taxAnnualAmount: numeric('tax_annual_amount'),
   taxLegalDesc: text('tax_legal_desc'),
   parcelNumber: varchar('parcel_number'),
 

@@ -137,6 +137,31 @@ function enrichStatusHistory(statusHistoryRows: any[]) {
   });
 }
 
+// ─── Helper: normalize HOA fee to monthly amount ─────────────────────────────
+
+function normalizeToMonthly(fee: number, frequency: string | null): number | null {
+  if (fee <= 0) return null;
+  switch ((frequency || '').toLowerCase()) {
+    case 'monthly': return Math.round(fee * 100) / 100;
+    case 'quarterly': return Math.round((fee / 3) * 100) / 100;
+    case 'semi-annually': return Math.round((fee / 6) * 100) / 100;
+    case 'annually': return Math.round((fee / 12) * 100) / 100;
+    default: return Math.round(fee * 100) / 100; // assume monthly if unspecified
+  }
+}
+
+// ─── Helper: derive story count from levels array ────────────────────────────
+
+function deriveStoriesFromLevels(levels: string[] | null): number | null {
+  if (!levels || levels.length === 0) return null;
+  const levelMap: Record<string, number> = {
+    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+    'multi/split': 2, 'split level': 2, 'tri-level': 3,
+  };
+  const first = levels[0]?.toLowerCase();
+  return levelMap[first] ?? levels.length;
+}
+
 // ─── Format a property row into the V2 detail structure ─────────────────────
 
 function formatPropertyDetail(
@@ -151,8 +176,6 @@ function formatPropertyDetail(
   const originalPrice = parseFloat(row.original_list_price) || 0;
   const livingArea = parseFloat(row.living_area) || 0;
   const lotAcres = parseFloat(row.lot_size_acres) || 0;
-  const taxAnnual = parseFloat(row.local_tax_annual || '0') || 0;
-  const hoaFee = parseFloat(row.local_hoa_fee || '0') || 0;
 
   const pricePerSqft = livingArea > 0 ? Math.round((listPrice / livingArea) * 100) / 100 : null;
   const pricePerAcre = lotAcres > 0 ? Math.round((listPrice / lotAcres) * 100) / 100 : null;
@@ -226,7 +249,7 @@ function formatPropertyDetail(
       living_area_sqft: livingArea || null,
       lot_size_acres: lotAcres || null,
       lot_size_sqft: parseFloat(row.lot_size_sqft) || null,
-      stories: row.stories,
+      stories: parseFloat(row.stories) || deriveStoriesFromLevels(row.levels),
     },
     rooms: {
       bedrooms: parseInt(row.bedrooms_total) || null,
@@ -277,10 +300,27 @@ function formatPropertyDetail(
     financial: {
       hoa: {
         required: row.association_yn || false,
+        fee: parseFloat(row.association_fee) || null,
+        fee_frequency: row.association_fee_frequency || null,
+        fee_monthly: normalizeToMonthly(
+          parseFloat(row.association_fee) || 0,
+          row.association_fee_frequency,
+        ),
+        name: row.association_name || null,
+        includes: row.association_fee_includes || [],
+        fee2: parseFloat(row.association_fee2) || null,
+        fee2_frequency: row.association_fee2_frequency || null,
       },
       taxes: {
         year: row.tax_year,
         assessed_value: parseFloat(row.tax_assessed_value) || null,
+        annual_amount: parseFloat(row.tax_annual_amount) || null,
+        monthly_amount: parseFloat(row.tax_annual_amount)
+          ? Math.round((parseFloat(row.tax_annual_amount) / 12) * 100) / 100
+          : null,
+        tax_rate: (parseFloat(row.tax_annual_amount) && parseFloat(row.tax_assessed_value))
+          ? Math.round((parseFloat(row.tax_annual_amount) / parseFloat(row.tax_assessed_value)) * 10000) / 100
+          : null,
         legal_description: row.tax_legal_desc,
         parcel_number: row.parcel_number,
       },

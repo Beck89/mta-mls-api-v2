@@ -495,11 +495,21 @@ GET /api/listings
     },
     "financial": {
       "hoa": {
-        "required": true
+        "required": true,
+        "fee": 150,
+        "fee_frequency": "Monthly",
+        "fee_monthly": 150,
+        "name": "Santa Rita Ranch HOA",
+        "includes": ["Common Area Maintenance", "Landscaping"],
+        "fee2": null,
+        "fee2_frequency": null
       },
       "taxes": {
         "year": 2024,
         "assessed_value": 85000,
+        "annual_amount": 5200,
+        "monthly_amount": 433.33,
+        "tax_rate": 6.12,
         "legal_description": "LOT 1 BLK A SANTA RITA RANCH",
         "parcel_number": "R123456"
       }

@@ -397,7 +397,7 @@ Returns a comprehensive `listing` object with nested sections:
     "room_list": [{ "type", "dimensions", "features" }],
     "features": { "interior", "exterior", "construction", "roof", "foundation", "flooring", "windows", "lot", "fencing", "parking", "security", "pool", "fireplace", "fireplaces_total", "view", "waterfront", "waterfront_features", "horse_property", "horse_amenities", "patio_porch", "community", "green_energy" },
     "systems": { "cooling", "heating", "appliances", "utilities", "water", "sewer" },
-    "financial": { "hoa": { "required" }, "taxes": { "year", "assessed_value", "legal_description", "parcel_number" } },
+    "financial": { "hoa": { "required", "fee", "fee_frequency", "fee_monthly", "name", "includes", "fee2", "fee2_frequency" }, "taxes": { "year", "assessed_value", "annual_amount", "monthly_amount", "tax_rate", "legal_description", "parcel_number" } },
     "schools": { "elementary", "middle", "high" },
     "description": "...",
     "directions": "...",
