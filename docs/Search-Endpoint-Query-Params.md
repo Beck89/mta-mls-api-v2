@@ -164,6 +164,21 @@ Values for these parameters are **slugs** obtained from the `/api/suggest` typea
 
 ---
 
+## Rental-Specific Filters
+
+These filters query rental-specific fields stored in the `local_fields` JSONB column. They are most useful when combined with `property_type=Residential Lease`.
+
+| Parameter | Type | Constraints | Description |
+|---|---|---|---|
+| `pets_allowed` | boolean | `true`, `false` | When `true`, returns listings that allow pets (`ACT_MaxNumofPets > 0`). |
+| `housing_vouchers` | boolean | `true`, `false` | When `true`, returns listings that accept housing vouchers (Section 8). |
+| `max_security_deposit` | integer | ≥ 0 | Maximum security deposit in USD. Only returns listings with a security deposit at or below this amount. |
+| `laundry_in_unit` | boolean | `true`, `false` | When `true`, returns listings with in-unit laundry (`ACT_LaundryLocation` contains "In Unit"). |
+| `min_lease_months` | integer | ≥ 1 | Minimum acceptable lease term in months. Returns listings whose max lease term is at least this value. |
+| `max_lease_months` | integer | ≥ 1 | Maximum acceptable lease term in months. Returns listings whose min lease term is at most this value. |
+
+---
+
 ## Text Search
 
 | Parameter | Type | Description |
@@ -228,6 +243,23 @@ Each object in the `data` array includes:
 | `photo_count` | integer | Total number of photos. |
 | `photo_urls` | `{ order, url }[]` | Up to 3 photo URLs, ordered by `media_order`. |
 | `next_open_house` | `{ date, start_time, end_time }` \| null | Next upcoming open house, if any. |
+| `rental_details` | object \| null | Rental-specific details. Only populated for `Residential Lease` and `Commercial Lease` listings; `null` for all other property types. See below. |
+
+#### `rental_details` object (when not null)
+
+| Field | Type | Description |
+|---|---|---|
+| `security_deposit` | number \| null | Security deposit amount in USD. |
+| `pet_deposit` | number \| null | Pet deposit amount in USD. |
+| `monthly_pet_rent` | number \| null | Additional monthly pet rent in USD. |
+| `pets_allowed` | boolean | Whether pets are allowed (max_pets > 0). |
+| `max_pets` | number \| null | Maximum number of pets allowed. |
+| `lease_min_months` | number \| null | Minimum lease term in months. |
+| `lease_max_months` | number \| null | Maximum lease term in months. |
+| `housing_vouchers_accepted` | boolean | Whether housing vouchers (Section 8) are accepted. |
+| `smoking_allowed` | boolean | Whether smoking is allowed inside. |
+| `laundry_location` | string[] | Laundry location(s), e.g. `["In Unit"]`, `["Main Level", "Laundry Room"]`. |
+| `application_url` | string \| null | URL for online rental application (RentSpree or other). |
 
 ### `metadata` object
 
@@ -284,4 +316,13 @@ GET /api/listings/search?county=travis-county&open_house=this_weekend
 
 # New construction condos or townhouses, sorted by newest
 GET /api/listings/search?new_construction=true&property_sub_type=Condominium,Townhouse&sort_by=list_date&sort_direction=desc
+
+# Pet-friendly rentals in Austin with in-unit laundry
+GET /api/listings/search?property_type=Residential Lease&city=austin&pets_allowed=true&laundry_in_unit=true
+
+# Rentals accepting housing vouchers with security deposit under $1000
+GET /api/listings/search?property_type=Residential Lease&housing_vouchers=true&max_security_deposit=1000
+
+# Short-term rentals (6 months or less)
+GET /api/listings/search?property_type=Residential Lease&max_lease_months=6
 ```

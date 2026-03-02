@@ -174,6 +174,19 @@ GET /api/listings/search
 | `back_on_market` | `"true"` | Listings that went Pending/Active Under Contract → Active (deal fell through) |
 | `multiple_price_reductions` | `"true"` | Listings with more than one price reduction (motivated sellers) |
 
+#### Rental-Specific Filters
+
+These filters are most useful when combined with `property_type=Residential Lease`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pets_allowed` | `"true"` | Only listings that allow pets |
+| `housing_vouchers` | `"true"` | Only listings accepting housing vouchers (Section 8) |
+| `max_security_deposit` | int | Maximum security deposit in USD |
+| `laundry_in_unit` | `"true"` | Only listings with in-unit laundry |
+| `min_lease_months` | int | Minimum acceptable lease term in months |
+| `max_lease_months` | int | Maximum acceptable lease term in months |
+
 #### Text Search
 
 | Parameter | Type | Description |
@@ -229,7 +242,8 @@ GET /api/listings/search
         { "order": 1, "url": "https://mls-media.movingtoaustin.com/Property/ACT218251278/ACT218350137.jpg" },
         { "order": 2, "url": "https://mls-media.movingtoaustin.com/Property/ACT218251278/ACT218350138.jpg" }
       ],
-      "next_open_house": null
+      "next_open_house": null,
+      "rental_details": null
     }
   ],
   "metadata": {
@@ -326,6 +340,7 @@ When `include_map_pins=true` is passed, the response includes an additional `map
 | `_geo` | object \| null | `{ lat, lng }` for mapping libraries |
 | `photo_urls` | array | First 3 photos with `{ order, url }` |
 | `next_open_house` | object \| null | `{ date, start_time, end_time }` |
+| `rental_details` | object \| null | Rental-specific details (only for lease listings, `null` otherwise). See [Rental Listings Integration](./Rental-Listings-Integration.md). |
 | `bounds` | object \| null | Bounding box of results for map centering |
 
 ### Example Requests
@@ -357,6 +372,15 @@ GET /api/listings/search?min_latitude=30.25&max_latitude=30.35&min_longitude=-97
 
 # Pagination (page 2+) — no map_pins needed, pins already loaded
 GET /api/listings/search?min_latitude=30.25&max_latitude=30.35&min_longitude=-97.80&max_longitude=-97.70&status=active&items_per_page=30&page=2
+
+# Pet-friendly rentals in Austin with in-unit laundry
+GET /api/listings/search?property_type=Residential Lease&city=austin&pets_allowed=true&laundry_in_unit=true&status=active
+
+# Rentals accepting housing vouchers under $1500/mo
+GET /api/listings/search?property_type=Residential Lease&housing_vouchers=true&max_price=1500&status=active
+
+# Short-term rentals (6 months or less)
+GET /api/listings/search?property_type=Residential Lease&max_lease_months=6&status=active
 ```
 
 > **Multi-value logic**: Comma-separated values within the same parameter use **OR** logic (e.g., `zip_code=78704,78745` returns listings in either ZIP). Different parameters are combined with **AND** logic (e.g., `city=Austin&min_bedrooms=3` returns Austin listings with 3+ beds).
@@ -413,6 +437,7 @@ Returns a comprehensive `listing` object with nested sections:
     },
     "status_history": [{ "old_status", "new_status", "days_in_status", "timestamp" }],
     "calculated_metrics": { "price_per_sqft", "price_per_acre", "days_on_market" },
+    "rental_details": { "security_deposit", "lease_terms", "pets", "smoking_allowed", "housing_vouchers_accepted", "laundry_location", "unit_style", "meter_description", "complex_name", "management_company", "application", "..." },
     "local_fields": { ... }
   }
 }
@@ -942,6 +967,20 @@ interface SearchResponse {
 ### Listing Card Component
 
 ```typescript
+interface RentalDetails {
+  security_deposit: number | null;
+  pet_deposit: number | null;
+  monthly_pet_rent: number | null;
+  pets_allowed: boolean;
+  max_pets: number | null;
+  lease_min_months: number | null;
+  lease_max_months: number | null;
+  housing_vouchers_accepted: boolean;
+  smoking_allowed: boolean;
+  laundry_location: string[];
+  application_url: string | null;
+}
+
 interface ListingCard {
   listing_id: string;
   list_price: number;
@@ -957,6 +996,7 @@ interface ListingCard {
   price_reduction_count: number;
   back_on_market: boolean;
   next_open_house: { date: string; start_time: string; end_time: string } | null;
+  rental_details: RentalDetails | null;  // Only populated for lease listings
   _geo: { lat: number; lng: number } | null;
 }
 ```

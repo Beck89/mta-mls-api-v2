@@ -162,6 +162,57 @@ function deriveStoriesFromLevels(levels: string[] | null): number | null {
   return levelMap[first] ?? levels.length;
 }
 
+// ─── Helper: extract structured rental details from local_fields ─────────────
+
+function extractRentalDetails(local: any): any | null {
+  // Only return rental details if there's meaningful rental data
+  const securityDeposit = local.ACT_SecurityDeposit;
+  if (securityDeposit === undefined && !local.ACT_MinLeaseMonths && !local.ACT_MaxLeaseMonths) {
+    return null;
+  }
+
+  const maxPets = parseInt(local.ACT_MaxNumofPets) || 0;
+  const petDeposit = parseFloat(local.ACT_PetDeposit) || null;
+  const additionalPetFee = parseFloat(local.ACT_AdditionalPetFee) || null;
+  const perPet = local.ACT_PerPetYN === '1' || local.ACT_PerPetYN === true;
+
+  return {
+    security_deposit: parseFloat(securityDeposit) || null,
+    lease_terms: {
+      min_months: parseInt(local.ACT_MinLeaseMonths) || null,
+      max_months: parseInt(local.ACT_MaxLeaseMonths) || null,
+    },
+    pets: {
+      allowed: maxPets > 0,
+      max_number: maxPets || null,
+      deposit: petDeposit,
+      monthly_pet_rent: additionalPetFee,
+      deposit_per_pet: perPet,
+    },
+    smoking_allowed: local.ACT_SmokingInsideYN === '1' || local.ACT_SmokingInsideYN === true,
+    housing_vouchers_accepted: local.ACT_HousingVouchersYN === '1' || local.ACT_HousingVouchersYN === true,
+    laundry_location: local.ACT_LaundryLocation
+      ? local.ACT_LaundryLocation.split(',').map((s: string) => s.trim()).filter(Boolean)
+      : [],
+    unit_style: local.ACT_UnitStyle
+      ? local.ACT_UnitStyle.split(',').map((s: string) => s.trim()).filter(Boolean)
+      : [],
+    meter_description: local.ACT_MeterDescription
+      ? local.ACT_MeterDescription.split(',').map((s: string) => s.trim()).filter(Boolean)
+      : [],
+    complex_name: local.ACT_ComplexName || null,
+    management_company: local.ACT_ManagementCompany || null,
+    home_office: local.ACT_HomeOfficeYN === '1' || local.ACT_HomeOfficeYN === true || null,
+    guest_accommodation: local.ACT_GuestAccommodatonDesc || null,
+    num_living_areas: parseInt(local.ACT_NumLiving) || null,
+    application: {
+      rentspree_url: local.ACT_RentSpreeURL || null,
+      online_app_url: local.ACT_OnlineAppInstructionsPublic || null,
+    },
+    flood_plain: local.ACT_FEMAFloodPlain || null,
+  };
+}
+
 // ─── Format a property row into the V2 detail structure ─────────────────────
 
 function formatPropertyDetail(
@@ -197,6 +248,10 @@ function formatPropertyDetail(
 
   // Parse local fields for MLS-specific data
   const local = row.local_fields || {};
+
+  // Extract structured rental details (only for lease listings)
+  const isLease = (row.property_type || '').toLowerCase().includes('lease');
+  const rentalDetails = isLease ? extractRentalDetails(local) : null;
 
   return {
     ids: {
@@ -374,6 +429,7 @@ function formatPropertyDetail(
       price_per_acre: pricePerAcre,
       days_on_market: daysOnMarket,
     },
+    rental_details: rentalDetails,
     local_fields: local,
   };
 }

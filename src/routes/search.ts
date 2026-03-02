@@ -95,6 +95,14 @@ const searchQuerySchema = z.object({
   back_on_market: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
   multiple_price_reductions: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
 
+  // Rental-specific filters
+  pets_allowed: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  housing_vouchers: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  max_security_deposit: z.coerce.number().int().min(0).optional(),
+  laundry_in_unit: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  min_lease_months: z.coerce.number().int().min(1).optional(),
+  max_lease_months: z.coerce.number().int().min(1).optional(),
+
   // Text search
   keywords: z.string().optional(),
 
@@ -418,6 +426,36 @@ function buildFilters(params: z.infer<typeof searchQuerySchema>): SqlFragment[] 
     );
   }
 
+  // ─── Rental-specific filters (local_fields JSONB) ─────────────────────────
+
+  // Pets allowed — max_pets > 0
+  if (params.pets_allowed === true) {
+    filters.push(sql`(p.local_fields->>'ACT_MaxNumofPets')::int > 0`);
+  }
+
+  // Housing vouchers accepted
+  if (params.housing_vouchers === true) {
+    filters.push(sql`p.local_fields->>'ACT_HousingVouchersYN' = '1'`);
+  }
+
+  // Max security deposit
+  if (params.max_security_deposit !== undefined) {
+    filters.push(sql`(p.local_fields->>'ACT_SecurityDeposit')::numeric <= ${params.max_security_deposit}`);
+  }
+
+  // Laundry in unit
+  if (params.laundry_in_unit === true) {
+    filters.push(sql`p.local_fields->>'ACT_LaundryLocation' ILIKE '%In Unit%'`);
+  }
+
+  // Lease term range
+  if (params.min_lease_months !== undefined) {
+    filters.push(sql`(p.local_fields->>'ACT_MaxLeaseMonths')::int >= ${params.min_lease_months}`);
+  }
+  if (params.max_lease_months !== undefined) {
+    filters.push(sql`(p.local_fields->>'ACT_MinLeaseMonths')::int <= ${params.max_lease_months}`);
+  }
+
   return filters;
 }
 
@@ -515,6 +553,28 @@ function formatSearchResult(row: any) {
     photo_count: row.photos_count || 0,
     photo_urls: photoUrls,
     next_open_house: nextOpenHouse,
+    // Rental-specific fields (only populated for lease listings)
+    rental_details: (() => {
+      const isLease = (row.property_type || '').toLowerCase().includes('lease');
+      if (!isLease) return null;
+      const local = row.local_fields || {};
+      const maxPets = parseInt(local.ACT_MaxNumofPets) || 0;
+      return {
+        security_deposit: parseFloat(local.ACT_SecurityDeposit) || null,
+        pet_deposit: parseFloat(local.ACT_PetDeposit) || null,
+        monthly_pet_rent: parseFloat(local.ACT_AdditionalPetFee) || null,
+        pets_allowed: maxPets > 0,
+        max_pets: maxPets || null,
+        lease_min_months: parseInt(local.ACT_MinLeaseMonths) || null,
+        lease_max_months: parseInt(local.ACT_MaxLeaseMonths) || null,
+        housing_vouchers_accepted: local.ACT_HousingVouchersYN === '1' || local.ACT_HousingVouchersYN === true,
+        smoking_allowed: local.ACT_SmokingInsideYN === '1' || local.ACT_SmokingInsideYN === true,
+        laundry_location: local.ACT_LaundryLocation
+          ? local.ACT_LaundryLocation.split(',').map((s: string) => s.trim()).filter(Boolean)
+          : [],
+        application_url: local.ACT_RentSpreeURL || local.ACT_OnlineAppInstructionsPublic || null,
+      };
+    })(),
   };
 }
 
@@ -584,6 +644,7 @@ const SELECT_FIELDS = sql`
   p.longitude,
   p.photos_count,
   p.original_entry_ts,
+  p.local_fields,
   (SELECT COUNT(*)::int FROM price_history ph
    WHERE ph.listing_key = p.listing_key
      AND ph.old_price IS NOT NULL
